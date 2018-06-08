@@ -633,13 +633,14 @@ func (a *azureObjects) ListObjectsV2(ctx context.Context, bucket, prefix, contin
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (a *azureObjects) GetObject(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string) error {
+func (a *azureObjects) GetObject(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string, objInfo minio.ObjectInfo) error {
+
 	// startOffset cannot be negative.
 	if startOffset < 0 {
 		logger.LogIf(ctx, minio.InvalidRange{})
 		return azureToObjectError(minio.InvalidRange{}, bucket, object)
 	}
-
+	
 	blobRange := &storage.BlobRange{Start: uint64(startOffset)}
 	if length > 0 {
 		blobRange.End = uint64(startOffset + length - 1)
@@ -664,6 +665,7 @@ func (a *azureObjects) GetObject(ctx context.Context, bucket, object string, sta
 	logger.LogIf(ctx, err)
 	return err
 }
+
 
 // GetObjectInfo - reads blob metadata properties and replies back minio.ObjectInfo,
 // uses zure equivalent GetBlobProperties.

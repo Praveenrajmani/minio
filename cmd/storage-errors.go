@@ -76,6 +76,9 @@ var errBitrotHashAlgoInvalid = errors.New("bit-rot hash algorithm is invalid")
 // errCrossDeviceLink - rename across devices not allowed.
 var errCrossDeviceLink = errors.New("Rename across devices not allowed, please fix your backend configuration")
 
+// errReadBlock - pass incase read-write rule fails.
+var errReadBlock = errors.New("Read has been blocked as changes are detected in the data during the run, please try again")
+
 // hashMisMatchError - represents a bit-rot hash verification failure
 // error.
 type hashMismatchError struct {

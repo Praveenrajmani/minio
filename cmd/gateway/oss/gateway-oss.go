@@ -512,6 +512,7 @@ func (l *ossObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continua
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
 func ossGetObject(ctx context.Context, client *oss.Client, bucket, key string, startOffset, length int64, writer io.Writer, etag string) error {
+	
 	if length < 0 && length != -1 {
 		logger.LogIf(ctx, fmt.Errorf("Invalid argument"))
 		return ossToObjectError(fmt.Errorf("Invalid argument"), bucket, key)
@@ -548,7 +549,8 @@ func ossGetObject(ctx context.Context, client *oss.Client, bucket, key string, s
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (l *ossObjects) GetObject(ctx context.Context, bucket, key string, startOffset, length int64, writer io.Writer, etag string) error {
+func (l *ossObjects) GetObject(ctx context.Context, bucket, key string, startOffset, length int64, writer io.Writer, etag string, objInfo minio.ObjectInfo) error {
+	
 	return ossGetObject(ctx, l.Client, bucket, key, startOffset, length, writer, etag)
 }
 
