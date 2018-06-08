@@ -640,7 +640,7 @@ func (a *azureObjects) GetObject(ctx context.Context, bucket, object string, sta
 		logger.LogIf(ctx, minio.InvalidRange{})
 		return azureToObjectError(minio.InvalidRange{}, bucket, object)
 	}
-
+	
 	blobRange := &storage.BlobRange{Start: uint64(startOffset)}
 	if length > 0 {
 		blobRange.End = uint64(startOffset + length - 1)

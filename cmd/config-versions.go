@@ -681,3 +681,39 @@ type serverConfigV26 struct {
 	// Notification queue configuration.
 	Notify notifier `json:"notify"`
 }
+
+// CompressionConfig represents compression config settings
+type CompressionConfig struct {
+	DoNotCompressExtensions  []string `json:"doNotCompressExtensions"`
+	DoNotCompressContentTypes []string `json:"doNotCompressContentTypes"`
+}
+
+// serverConfigV27 is just like version '26', stores additionally
+// doNotCompress fields for compression.
+//
+// IMPORTANT NOTE: When updating this struct make sure that
+// serverConfig.ConfigDiff() is updated as necessary.
+type serverConfigV27 struct {
+	quick.Config `json:"-"` // ignore interfaces
+
+	Version string `json:"version"`
+
+	// S3 API configuration.
+	Credential auth.Credentials `json:"credential"`
+	Region     string           `json:"region"`
+	Browser    BoolFlag         `json:"browser"`
+	Worm       BoolFlag         `json:"worm"`
+	Domain     string           `json:"domain"`
+
+	// Storage class configuration
+	StorageClass storageClassConfig `json:"storageclass"`
+
+	// Cache configuration
+	Cache CacheConfig `json:"cache"`
+
+	// Compression configuration
+	Compression CompressionConfig `json:"compression"`
+
+	// Notification queue configuration.
+	Notify notifier `json:"notify"`
+}

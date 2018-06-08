@@ -40,9 +40,9 @@ import (
 // 6. Make changes in config-current_test.go for any test change
 
 // Config version
-const serverConfigVersion = "26"
+const serverConfigVersion = "27"
 
-type serverConfig = serverConfigV26
+type serverConfig = serverConfigV27
 
 var (
 	// globalServerConfig server config.
@@ -129,6 +129,17 @@ func (s *serverConfig) GetCacheConfig() CacheConfig {
 	return s.Cache
 }
 
+// SetCacheConfig sets the current cache config
+func (s *serverConfig) SetCompressionConfig(extensions []string, contentTypes []string) {
+	s.Compression.DoNotCompressExtensions = extensions
+	s.Compression.DoNotCompressExtensions = contentTypes
+}
+
+// GetCompressionConfig gets the current compression config
+func (s *serverConfig) GetCompressionConfig() CompressionConfig {
+	return s.Compression
+}
+
 // Save config file to corresponding backend
 func Save(configFile string, data interface{}) error {
 	return quick.SaveConfig(data, configFile, globalEtcdClient)
@@ -163,6 +174,8 @@ func (s *serverConfig) ConfigDiff(t *serverConfig) string {
 		return "StorageClass configuration differs"
 	case !reflect.DeepEqual(s.Cache, t.Cache):
 		return "Cache configuration differs"
+	case !reflect.DeepEqual(s.Compression, t.Compression):
+		return "Compression configuration differs"
 	case !reflect.DeepEqual(s.Notify.AMQP, t.Notify.AMQP):
 		return "AMQP Notification configuration differs"
 	case !reflect.DeepEqual(s.Notify.NATS, t.Notify.NATS):
@@ -209,6 +222,10 @@ func newServerConfig() *serverConfig {
 			Expiry:  globalCacheExpiry,
 			MaxUse:  globalCacheMaxUse,
 		},
+		Compression: CompressionConfig{
+			DoNotCompressExtensions: []string{},
+			DoNotCompressContentTypes: []string{},
+		},
 		Notify: notifier{},
 	}
 
@@ -236,6 +253,10 @@ func newServerConfig() *serverConfig {
 	srvCfg.Cache.Exclude = make([]string, 0)
 	srvCfg.Cache.Expiry = globalCacheExpiry
 	srvCfg.Cache.MaxUse = globalCacheMaxUse
+
+	srvCfg.Compression.DoNotCompressExtensions = make([]string, 0)
+	srvCfg.Compression.DoNotCompressContentTypes = make([]string, 0)
+	
 	return srvCfg
 }
 
@@ -277,6 +298,9 @@ func newConfig() error {
 		srvCfg.SetCacheConfig(globalCacheDrives, globalCacheExcludes, globalCacheExpiry, globalCacheMaxUse)
 	}
 
+	if globalIsEnvCompressionExclude {
+		srvCfg.SetCompressionConfig(globalDoNotCompressExtensions, globalDoNotCompressContentTypes)
+	}
 	// hold the mutex lock before a new config is assigned.
 	// Save the new config globally.
 	// unlock the mutex.
@@ -365,6 +389,10 @@ func loadConfig() error {
 		srvCfg.SetCacheConfig(globalCacheDrives, globalCacheExcludes, globalCacheExpiry, globalCacheMaxUse)
 	}
 
+	if globalIsEnvCompressionExclude {
+		srvCfg.SetCompressionConfig(globalDoNotCompressExtensions, globalDoNotCompressContentTypes)
+	}
+
 	// hold the mutex lock before a new config is assigned.
 	globalServerConfigMu.Lock()
 	globalServerConfig = srvCfg
@@ -392,6 +420,11 @@ func loadConfig() error {
 		globalCacheExcludes = cacheConf.Exclude
 		globalCacheExpiry = cacheConf.Expiry
 		globalCacheMaxUse = cacheConf.MaxUse
+	}
+	if !globalIsEnvCompressionExclude {
+		compressionConf := globalServerConfig.GetCompressionConfig()
+		globalDoNotCompressExtensions = compressionConf.DoNotCompressExtensions
+		globalDoNotCompressContentTypes = compressionConf.DoNotCompressContentTypes
 	}
 	globalServerConfigMu.Unlock()
 

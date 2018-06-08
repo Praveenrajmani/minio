@@ -115,6 +115,7 @@ func handleCommonCmdArgs(ctx *cli.Context) {
 }
 
 func handleCommonEnvVars() {
+	compressEnvDelimiter := ","
 	// Start profiler if env is set.
 	if profiler := os.Getenv("_MINIO_PROFILER"); profiler != "" {
 		globalProfiler = startProfiler(profiler)
@@ -264,5 +265,24 @@ func handleCommonEnvVars() {
 		// if worm is turned off or on.
 		globalIsEnvWORM = true
 		globalWORMEnabled = bool(wormFlag)
+	}
+	doNotCompressExtensions := os.Getenv("MINIO_DONOTCOMPRESS_EXTENSIONS")
+	doNotCompressContentTypes := os.Getenv("MINIO_DONOTCOMPRESS_CONTENTTYPES")
+	if doNotCompressExtensions != "" || doNotCompressContentTypes != "" {
+		globalIsEnvCompressionExclude = true
+		if doNotCompressExtensions != "" {
+			extensions, err := parseCompressExcludes(strings.Split(doNotCompressExtensions, compressEnvDelimiter))
+			if err != nil {
+				logger.Fatal(err, "Unable to parse MINIO_DONOTCOMPRESS_EXTENSIONS value (`%s`)", extensions)
+			}
+			globalDoNotCompressExtensions = extensions
+		} 
+		if doNotCompressContentTypes != "" {
+			contenttypes, err := parseCompressExcludes(strings.Split(doNotCompressContentTypes, compressEnvDelimiter))
+			if err != nil {
+				logger.Fatal(err, "Unable to parse MINIO_DONOTCOMPRESS_CONTENTTYPES value (`%s`)", contenttypes)
+			}
+			globalDoNotCompressContentTypes = contenttypes
+		}
 	}
 }

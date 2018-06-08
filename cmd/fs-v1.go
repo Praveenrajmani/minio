@@ -28,7 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
+	
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/hash"
 	"github.com/minio/minio/pkg/lock"
@@ -528,6 +528,7 @@ func (fs *FSObjects) GetObject(ctx context.Context, bucket, object string, offse
 		return err
 	}
 	defer objectLock.RUnlock()
+
 	return fs.getObject(ctx, bucket, object, offset, length, writer, etag, true)
 }
 
@@ -608,6 +609,10 @@ func (fs *FSObjects) getObject(ctx context.Context, bucket, object string, offse
 	buf := make([]byte, int(bufSize))
 
 	_, err = io.CopyBuffer(writer, io.LimitReader(reader, length), buf)
+	// The writer will be closed incase of range queries, which will emit ErrClosedPipe.
+	if err == io.ErrClosedPipe {
+		err = nil
+	}
 	logger.LogIf(ctx, err)
 	return toObjectErr(err, bucket, object)
 }
@@ -796,7 +801,7 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 
 	fsMeta := newFSMetaV1()
 	fsMeta.Meta = meta
-
+	
 	// This is a special case with size as '0' and object ends
 	// with a slash separator, we treat it like a valid operation
 	// and return success.
@@ -828,7 +833,7 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 	}
 
 	// Validate input data size and it can never be less than zero.
-	if data.Size() < 0 {
+	if data.Size() < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return ObjectInfo{}, errInvalidArgument
 	}
@@ -881,7 +886,7 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 		fsRemoveFile(ctx, fsTmpObjPath)
 		return ObjectInfo{}, IncompleteBody{}
 	}
-
+	
 	// Delete the temporary object in the case of a
 	// failure. If PutObject succeeds, then there would be
 	// nothing to delete.
