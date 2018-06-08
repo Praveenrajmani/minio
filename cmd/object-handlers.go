@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"crypto/hmac"
+	sha "crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/xml"
@@ -30,6 +31,7 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"bytes"
 
 	"github.com/gorilla/mux"
 	"github.com/minio/minio/cmd/logger"
@@ -39,6 +41,7 @@ import (
 	"github.com/minio/minio/pkg/policy"
 	sha256 "github.com/minio/sha256-simd"
 	"github.com/minio/sio"
+	snappy "github.com/golang/snappy"
 )
 
 // supportedHeadGetReqParams - supported request parameters for GET and HEAD presigned request.
@@ -168,8 +171,6 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	setObjectHeaders(w, objInfo, hrange)
-	setHeadGetRespHeaders(w, r.URL.Query())
 	httpWriter := ioutil.WriteOnClose(writer)
 
 	getObject := objectAPI.GetObject
@@ -178,13 +179,37 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// Reads the object at startOffset and writes to mw.
-	if err = getObject(ctx, bucket, object, startOffset, length, httpWriter, objInfo.ETag); err != nil {
+	rd, wt := io.Pipe()
+	reader := snappy.NewReader(rd)
+
+	go func() {
+		n, err := io.Copy(httpWriter, reader)
+		if err != nil {
+			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			httpWriter.Close()
+			return
+		}
+		objInfo.Size = n
+		setObjectHeaders(w, objInfo, hrange)
+		setHeadGetRespHeaders(w, r.URL.Query())
+	}()
+
+	
+	if err = getObject(ctx, bucket, object, startOffset, length, wt, objInfo.ETag); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		}
 		httpWriter.Close()
 		return
 	}
+
+
+	if err != nil {
+		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+		httpWriter.Close()
+		return
+	}
+	wt.Close()
 
 	if err = httpWriter.Close(); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
@@ -709,6 +734,21 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	buf := new(bytes.Buffer)
+	snappyWriter:=snappy.NewWriter(buf)
+	defer snappyWriter.Close()
+	
+	if _, err := io.Copy(snappyWriter, reader); err != nil {
+		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+		return
+	}
+	
+	size = int64(len(buf.Bytes()))
+	h := sha.New()
+	h.Write(buf.Bytes())
+	sha256hex=hex.EncodeToString(h.Sum(nil))
+	reader = bytes.NewReader(buf.Bytes())
+	
 	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
 	if err != nil {
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
