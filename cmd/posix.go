@@ -42,6 +42,21 @@ const (
 	maxAllowedIOError = 5
 )
 
+// isValidVolname verifies a volname name in accordance with object
+// layer requirements.
+func isValidVolname(volname string) bool {
+	if len(volname) < 3 {
+		return false
+	}
+
+	if runtime.GOOS == "windows" {
+		// Volname shouldn't have reserved characters in Windows.
+		return !strings.ContainsAny(volname, `\:*?\"<>|`)
+	}
+
+	return true
+}
+
 // posix - implements StorageAPI interface.
 type posix struct {
 	// Disk usage metrics
@@ -137,7 +152,6 @@ func isDirEmpty(dirname string) bool {
 		return false
 	}
 	defer f.Close()
-
 	// List one entry.
 	_, err = f.Readdirnames(1)
 	if err != io.EOF {
@@ -152,14 +166,15 @@ func isDirEmpty(dirname string) bool {
 }
 
 // Initialize a new storage disk.
-func newPosix(path string) (StorageAPI, error) {
+func newPosix(path string) (*posix, error) {
 	var err error
 	if path, err = getValidPath(path); err != nil {
 		return nil, err
 	}
 
-	st := &posix{
-		diskPath: path,
+	p := &posix{
+		connected: true,
+		diskPath:  path,
 		// 1MiB buffer pool for posix internal operations.
 		pool: sync.Pool{
 			New: func() interface{} {
@@ -170,12 +185,10 @@ func newPosix(path string) (StorageAPI, error) {
 		stopUsageCh: make(chan struct{}),
 	}
 
-	st.connected = true
-
-	go st.diskUsage(globalServiceDoneCh)
+	go p.diskUsage(globalServiceDoneCh)
 
 	// Success.
-	return st, nil
+	return p, nil
 }
 
 // getDiskInfo returns given disk information.
@@ -285,6 +298,7 @@ func (s *posix) DiskInfo() (info DiskInfo, err error) {
 		Free:  di.Free,
 		Used:  atomic.LoadUint64(&s.totalUsed),
 	}, nil
+
 }
 
 // getVolDir - will convert incoming volume names to

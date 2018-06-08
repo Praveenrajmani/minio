@@ -29,6 +29,12 @@ var (
 		"Browser can only accept `on` and `off` values. To disable web browser access, set this value to `off`",
 	)
 
+	uiErrInvalidWormValue = newUIErrFn(
+		"Invalid WORM value",
+		"Please check the passed value",
+		"WORM can only accept `on` and `off` values. To enable WORM, set this value to `on`",
+	)
+
 	uiErrInvalidCacheDrivesValue = newUIErrFn(
 		"Invalid cache drive value",
 		"Please check the value in this ENV variable",
@@ -45,15 +51,6 @@ var (
 		"Invalid cache expiry value",
 		"Please check the passed value",
 		"MINIO_CACHE_EXPIRY: Valid cache expiry duration is in days.",
-	)
-
-	uiErrInvalidUsageCheckIntervalValue = newUIErrFn(
-		"Invalid usage check interval value",
-		"Please check the passed value",
-		`MINIO_USAGE_CHECK_INTERVAL: Valid usage check interval duration string is a signed sequence of decimal numbers,
-  each with optional fraction and a unit suffix, such as "2h45m". Valid time units are "ns", "us", "ms", "s", "m", "h".
-  Minimum supported value is '2h'.
-`,
 	)
 
 	uiErrInvalidCredentials = newUIErrFn(

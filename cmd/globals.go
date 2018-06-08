@@ -68,14 +68,12 @@ const (
 	// date and server date during signature verification.
 	globalMaxSkewTime = 15 * time.Minute // 15 minutes skew allowed.
 
-	// Default Read/Write timeouts for each connection.
-	globalConnReadTimeout  = 15 * time.Minute // Timeout after 15 minutes of no data sent by the client.
-	globalConnWriteTimeout = 15 * time.Minute // Timeout after 15 minutes if no data received by the client.
-
 	// Expiry duration after which the multipart uploads are deemed stale.
 	globalMultipartExpiry = time.Hour * 24 * 14 // 2 weeks.
 	// Cleanup interval when the stale multipart cleanup is initiated.
 	globalMultipartCleanupInterval = time.Hour * 24 // 24 hrs.
+	// Refresh interval to update in-memory bucket policy cache.
+	globalRefreshBucketPolicyInterval = 5 * time.Minute
 
 	// Limit of location constraint XML for unauthenticted PUT bucket operations.
 	maxLocationConstraintSize = 3 * humanize.MiByte
@@ -176,6 +174,7 @@ var (
 	// Set to store standard storage class
 	globalStandardStorageClass storageClass
 
+	globalIsEnvWORM   bool
 	globalWORMEnabled bool
 
 	// Is Disk Caching set up
@@ -186,16 +185,19 @@ var (
 	globalCacheExcludes []string
 	// Disk cache expiry
 	globalCacheExpiry = 90
+
+	// RPC V1 - Initial version
+	// RPC V2 - format.json XL version changed to 2
+	// RPC V3 - format.json XL version changed to 3
+	// Current RPC version
+	globalRPCAPIVersion = RPCVersion{3, 0, 0}
+
 	// Add new variable global values here.
 
-	// Minimum required usage check interval value.
-	globalMinimumUsageCheckInterval = 2 * time.Hour // 2 hours
 	// Default usage check interval value.
 	globalDefaultUsageCheckInterval = 12 * time.Hour // 12 hours
 	// Usage check interval value.
 	globalUsageCheckInterval = globalDefaultUsageCheckInterval
-	// Is env usage check interval set.
-	globalIsEnvUsageCheck bool
 )
 
 // global colors.
@@ -216,6 +218,7 @@ func getGlobalInfo() (globalInfo map[string]interface{}) {
 		"isDistXL":         globalIsDistXL,
 		"isXL":             globalIsXL,
 		"isBrowserEnabled": globalIsBrowserEnabled,
+		"isWorm":           globalWORMEnabled,
 		"isEnvBrowser":     globalIsEnvBrowser,
 		"isEnvCreds":       globalIsEnvCreds,
 		"isEnvRegion":      globalIsEnvRegion,

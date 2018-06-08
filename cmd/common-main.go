@@ -105,7 +105,7 @@ func handleCommonEnvVars() {
 	}
 
 	if browser := os.Getenv("MINIO_BROWSER"); browser != "" {
-		browserFlag, err := ParseBrowserFlag(browser)
+		browserFlag, err := ParseBoolFlag(browser)
 		if err != nil {
 			logger.Fatal(uiErrInvalidBrowserValue(nil).Msg("Unknown value `%s`", browser), "Unable to validate MINIO_BROWSER environment variable")
 		}
@@ -123,10 +123,7 @@ func handleCommonEnvVars() {
 		logger.FatalIf(err, "error opening file %s", traceFile)
 	}
 
-	globalDomainName = os.Getenv("MINIO_DOMAIN")
-	if globalDomainName != "" {
-		globalIsEnvDomainName = true
-	}
+	globalDomainName, globalIsEnvDomainName = os.LookupEnv("MINIO_DOMAIN")
 
 	if drives := os.Getenv("MINIO_CACHE_DRIVES"); drives != "" {
 		driveList, err := parseCacheDrives(strings.Split(drives, cacheEnvDelimiter))
@@ -151,15 +148,6 @@ func handleCommonEnvVars() {
 			logger.Fatal(uiErrInvalidCacheExpiryValue(err), "Unable to parse MINIO_CACHE_EXPIRY value (`%s`)", expiryStr)
 		}
 		globalCacheExpiry = expiry
-	}
-
-	if intervalStr := os.Getenv("MINIO_USAGE_CHECK_INTERVAL"); intervalStr != "" {
-		interval, err := parseDuration(intervalStr)
-		if err != nil {
-			logger.Fatal(uiErrInvalidUsageCheckIntervalValue(err), "Invalid MINIO_USAGE_CHECK_INTERVAL value (`%s`)", intervalStr)
-		}
-		globalUsageCheckInterval = interval
-		globalIsEnvUsageCheck = true
 	}
 
 	// In place update is true by default if the MINIO_UPDATE is not set
@@ -198,5 +186,15 @@ func handleCommonEnvVars() {
 	}
 
 	// Get WORM environment variable.
-	globalWORMEnabled = strings.EqualFold(os.Getenv("MINIO_WORM"), "on")
+	if worm := os.Getenv("MINIO_WORM"); worm != "" {
+		wormFlag, err := ParseBoolFlag(worm)
+		if err != nil {
+			logger.Fatal(uiErrInvalidWormValue(nil).Msg("Unknown value `%s`", worm), "Unable to validate MINIO_WORM environment variable")
+		}
+
+		// worm Envs are set globally, this does not represent
+		// if worm is turned off or on.
+		globalIsEnvWORM = true
+		globalWORMEnabled = bool(wormFlag)
+	}
 }

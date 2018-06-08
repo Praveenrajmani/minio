@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
-	"time"
 
 	"github.com/minio/minio/cmd/logger"
 
@@ -40,9 +39,9 @@ import (
 // 6. Make changes in config-current_test.go for any test change
 
 // Config version
-const serverConfigVersion = "24"
+const serverConfigVersion = "25"
 
-type serverConfig = serverConfigV24
+type serverConfig = serverConfigV25
 
 var (
 	// globalServerConfig server config.
@@ -86,7 +85,13 @@ func (s *serverConfig) GetCredential() auth.Credentials {
 // SetBrowser set if browser is enabled.
 func (s *serverConfig) SetBrowser(b bool) {
 	// Set the new value.
-	s.Browser = BrowserFlag(b)
+	s.Browser = BoolFlag(b)
+}
+
+// SetWorm set if worm is enabled.
+func (s *serverConfig) SetWorm(b bool) {
+	// Set the new value.
+	s.Worm = BoolFlag(b)
 }
 
 func (s *serverConfig) SetStorageClass(standardClass, rrsClass storageClass) {
@@ -100,20 +105,14 @@ func (s *serverConfig) GetStorageClass() (storageClass, storageClass) {
 	return s.StorageClass.Standard, s.StorageClass.RRS
 }
 
-// GetCredentials get current credentials.
+// GetBrowser get current credentials.
 func (s *serverConfig) GetBrowser() bool {
 	return bool(s.Browser)
 }
 
-// Set new usage configuration, currently only supports configuring
-// usage check interval.
-func (s *serverConfig) SetUsageConfig(checkUsageInterval time.Duration) {
-	s.Usage = usageConfig{checkUsageInterval}
-}
-
-// Get current usage configuration.
-func (s *serverConfig) GetUsageConfig() usageConfig {
-	return s.Usage
+// GetWorm get current credentials.
+func (s *serverConfig) GetWorm() bool {
+	return bool(s.Worm)
 }
 
 // SetCacheConfig sets the current cache config
@@ -153,8 +152,6 @@ func (s *serverConfig) ConfigDiff(t *serverConfig) string {
 		return "StorageClass configuration differs"
 	case !reflect.DeepEqual(s.Cache, t.Cache):
 		return "Cache configuration differs"
-	case !reflect.DeepEqual(s.Usage, t.Usage):
-		return "Usage configuration differs"
 	case !reflect.DeepEqual(s.Notify.AMQP, t.Notify.AMQP):
 		return "AMQP Notification configuration differs"
 	case !reflect.DeepEqual(s.Notify.NATS, t.Notify.NATS):
@@ -200,7 +197,6 @@ func newServerConfig() *serverConfig {
 			Exclude: []string{},
 			Expiry:  globalCacheExpiry,
 		},
-		Usage:  usageConfig{globalDefaultUsageCheckInterval},
 		Notify: notifier{},
 	}
 
@@ -245,6 +241,10 @@ func newConfig() error {
 		srvCfg.SetBrowser(globalIsBrowserEnabled)
 	}
 
+	if globalIsEnvWORM {
+		srvCfg.SetWorm(globalWORMEnabled)
+	}
+
 	if globalIsEnvRegion {
 		srvCfg.SetRegion(globalServerRegion)
 	}
@@ -259,10 +259,6 @@ func newConfig() error {
 
 	if globalIsDiskCacheEnabled {
 		srvCfg.SetCacheConfig(globalCacheDrives, globalCacheExcludes, globalCacheExpiry)
-	}
-
-	if globalIsEnvUsageCheck {
-		srvCfg.SetUsageConfig(globalUsageCheckInterval)
 	}
 
 	// hold the mutex lock before a new config is assigned.
@@ -343,6 +339,9 @@ func loadConfig() error {
 	if !globalIsEnvBrowser {
 		globalIsBrowserEnabled = globalServerConfig.GetBrowser()
 	}
+	if !globalIsEnvWORM {
+		globalWORMEnabled = globalServerConfig.GetWorm()
+	}
 	if !globalIsEnvRegion {
 		globalServerRegion = globalServerConfig.GetRegion()
 	}
@@ -357,9 +356,6 @@ func loadConfig() error {
 		globalCacheDrives = cacheConf.Drives
 		globalCacheExcludes = cacheConf.Exclude
 		globalCacheExpiry = cacheConf.Expiry
-	}
-	if !globalIsEnvUsageCheck {
-		globalUsageCheckInterval = globalServerConfig.GetUsageConfig().UsageCheckInterval
 	}
 	globalServerConfigMu.Unlock()
 
