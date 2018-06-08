@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"crypto/hmac"
+	sha "crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/xml"
@@ -30,6 +31,8 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"reflect"
+	"bytes"
 
 	"github.com/gorilla/mux"
 	"github.com/minio/minio/cmd/logger"
@@ -39,6 +42,7 @@ import (
 	"github.com/minio/minio/pkg/policy"
 	sha256 "github.com/minio/sha256-simd"
 	"github.com/minio/sio"
+	snappy "github.com/golang/snappy"
 )
 
 // supportedHeadGetReqParams - supported request parameters for GET and HEAD presigned request.
@@ -48,7 +52,7 @@ var supportedHeadGetReqParams = map[string]string{
 	"response-cache-control":       "Cache-Control",
 	"response-content-encoding":    "Content-Encoding",
 	"response-content-language":    "Content-Language",
-	"response-content-disposition": "Content-Disposition",
+    "response-content-disposition": "Content-Disposition",
 }
 
 // setHeadGetRespHeaders - set any requested parameters as response headers.
@@ -669,6 +673,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		putObject = objectAPI.PutObject
 	)
 	reader = r.Body
+	
 	switch rAuthType {
 	default:
 		// For all unknown auth types return error.
@@ -700,23 +705,69 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 
 	case authTypePresigned, authTypeSigned:
+		fmt.Println("signing with sha256")
+		fmt.Println(r.Header["X-Amz-Content-Sha256"])
 		if s3Err = reqSignatureV4Verify(r, globalServerConfig.GetRegion()); s3Err != ErrNone {
 			writeErrorResponse(w, s3Err, r.URL)
 			return
 		}
 		if !skipContentSha256Cksum(r) {
+			
 			sha256hex = getContentSha256Cksum(r)
 		}
 	}
 
-	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
+
+	var treader io.Reader
+
+	treader = reader
+		
+	p, err := goioutil.ReadAll(treader)
 	if err != nil {
+		//.Fatalf("read error: %v", err)
+		fmt.Println("error")
+	}
+	fmt.Println(len(string(p)))
+
+	buf := new(bytes.Buffer)
+	swriter:=snappy.NewWriter(buf)
+	//r := strings.NewReader([]byte("some io.Reader stream to be read\n"))
+	_, err = swriter.Write(p)
+
+	if err!=nil {
+		fmt.Println("errror in write")
+	}
+
+	fmt.Println("type: ",reflect.TypeOf(buf))
+	stream := buf.Bytes()
+	size = int64(len(string(stream)))
+	fmt.Println("length of compressed: ",len(string(stream)))
+	fmt.Println("compressed str: ",string(stream))
+
+	h := sha.New()
+	h.Write(stream)
+	fmt.Printf("%x", h.Sum(nil))
+	newhash:=hex.EncodeToString(h.Sum(nil))
+
+	
+
+	reader = bytes.NewReader(stream)
+	
+	fmt.Println("before hash reader")
+	fmt.Println(sha256hex)
+
+	fmt.Println("size: ",size)
+	fmt.Println("md5hex: ", md5hex)
+	hashReader, err := hash.NewReader(reader, size, md5hex, newhash)
+	if err != nil {
+		fmt.Println("error in hreader")
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
 
 	// Deny if WORM is enabled
 	if globalWORMEnabled {
+		fmt.Println("wenabled")
 		if _, err = objectAPI.GetObjectInfo(ctx, bucket, object); err == nil {
 			writeErrorResponse(w, ErrMethodNotAllowed, r.URL)
 			return
@@ -724,15 +775,20 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	if objectAPI.IsEncryptionSupported() {
+		fmt.Println("coming enc")
 		if hasSSECustomerHeader(r.Header) && !hasSuffix(object, slashSeparator) { // handle SSE-C requests
+			fmt.Println("metadat")
+			fmt.Println(metadata)
 			reader, err = EncryptRequest(hashReader, r, metadata)
 			if err != nil {
+				fmt.Println("err inn enc")
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 				return
 			}
 			info := ObjectInfo{Size: size}
 			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "") // do not try to verify encrypted content
 			if err != nil {
+				fmt.Println("err in 2nd hash")
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 				return
 			}
@@ -743,8 +799,14 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		putObject = api.CacheAPI().PutObject
 	}
 	// Create the object..
+	fmt.Println("before put object")
+	fmt.Println(metadata)
 	objInfo, err := putObject(ctx, bucket, object, hashReader, metadata)
+	fmt.Println("putObj response")
 	if err != nil {
+		fmt.Println("error from putObj")
+		fmt.Println(toAPIErrorCode(err))
+		fmt.Println(err)
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}

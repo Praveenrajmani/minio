@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"fmt"
 
 	"github.com/minio/minio/cmd/logger"
 	httptracer "github.com/minio/minio/pkg/handlers"
@@ -128,7 +129,9 @@ func extractMetadataFromHeader(ctx context.Context, header http.Header) (map[str
 		// and non canonical entries.
 		if _, ok := header[canonicalHeader]; ok {
 			metadata[supportedHeader] = header.Get(canonicalHeader)
+			fmt.Println("Keys in : ", supportedHeader)
 		} else if _, ok := header[supportedHeader]; ok {
+			fmt.Println("Keys in : ", supportedHeader)
 			metadata[supportedHeader] = header.Get(supportedHeader)
 		}
 	}
@@ -141,6 +144,7 @@ func extractMetadataFromHeader(ctx context.Context, header http.Header) (map[str
 		}
 		for _, prefix := range userMetadataKeyPrefixes {
 			if strings.HasPrefix(key, prefix) {
+				fmt.Println("Meta Keys: ", key)
 				metadata[key] = header.Get(key)
 				break
 			}

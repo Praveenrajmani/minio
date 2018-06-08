@@ -28,6 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"fmt"
 
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/hash"
@@ -813,6 +814,7 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 
 	// Validate input data size and it can never be less than zero.
 	if data.Size() < 0 {
+		fmt.Println("datasize zero")
 		logger.LogIf(ctx, errInvalidArgument)
 		return ObjectInfo{}, errInvalidArgument
 	}
@@ -824,6 +826,7 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 		fsMetaPath := pathJoin(bucketMetaDir, bucket, object, fs.metaJSONFile)
 		wlk, err = fs.rwPool.Create(fsMetaPath)
 		if err != nil {
+			fmt.Println("error in create")
 			logger.LogIf(ctx, err)
 			return ObjectInfo{}, toObjectErr(err, bucket, object)
 		}
@@ -853,6 +856,7 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 	fsTmpObjPath := pathJoin(fs.fsPath, minioMetaTmpBucket, fs.fsUUID, tempObj)
 	bytesWritten, err := fsCreateFile(ctx, fsTmpObjPath, data, buf, data.Size())
 	if err != nil {
+		fmt.Println("error in fscreate")
 		fsRemoveFile(ctx, fsTmpObjPath)
 		return ObjectInfo{}, toObjectErr(err, bucket, object)
 	}
@@ -862,6 +866,9 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 	// Should return IncompleteBody{} error when reader has fewer
 	// bytes than specified in request header.
 	if bytesWritten < data.Size() {
+		fmt.Println("bytesWritten: ",bytesWritten)
+		fmt.Println("data size: ", data.Size())
+		fmt.Println("responding here with inc body")
 		fsRemoveFile(ctx, fsTmpObjPath)
 		return ObjectInfo{}, IncompleteBody{}
 	}

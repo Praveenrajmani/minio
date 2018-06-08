@@ -22,6 +22,7 @@ import (
 	"os"
 	pathutil "path"
 	"runtime"
+	"fmt"
 
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/lock"
@@ -347,6 +348,8 @@ func fsCreateFile(ctx context.Context, filePath string, reader io.Reader, buf []
 		bytesWritten, err = io.CopyBuffer(writer, reader, buf)
 		if err != nil {
 			logger.LogIf(ctx, err)
+			fmt.Println("err from copy bufer")
+			fmt.Println(err)
 			return 0, err
 		}
 	} else {
