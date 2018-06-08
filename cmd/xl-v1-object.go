@@ -168,13 +168,55 @@ func (xl xlObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dstBuc
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (xl xlObjects) GetObject(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string) error {
+func (xl xlObjects) GetObject(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string, objInfo ObjectInfo) error {
 	// Lock the object before reading.
 	objectLock := xl.nsMutex.NewNSLock(bucket, object)
 	if err := objectLock.GetRLock(globalObjectTimeout); err != nil {
 		return err
 	}
 	defer objectLock.RUnlock()
+
+	if !isCompressed(objInfo.UserDefined) {
+		return xl.getObject(ctx, bucket, object, startOffset, length, writer, etag)
+	}
+
+	// Preserving the read-write rule.
+	// The read operation is blocked if changes in the decompressedSize is detected.
+	// Allowing this will cause data corruption , as the data is changed during the run.
+	modObjInfo, err := xl.getObjectInfo(ctx, bucket, object)
+	if err != nil {
+		logger.LogIf(ctx, err)
+		return err
+	}
+	// Check whether the decompressed size is changed.
+	compressSizeModified := func(objInfo ObjectInfo, modObjInfo ObjectInfo) bool {
+		if len(objInfo.Parts) == 0 && len(modObjInfo.Parts) == 0 {
+			objDecompressedSize := getDecompressedSize(objInfo)
+			modDecompressedSize := getDecompressedSize(modObjInfo)
+			if objDecompressedSize > 0 || modDecompressedSize > 0 {
+				if objDecompressedSize != modDecompressedSize { return true }
+			}
+		} else if len(objInfo.Parts) > 0 && len(modObjInfo.Parts) > 0 {
+			for i,part := range objInfo.Parts {
+				if part.DecompressedPartSize != modObjInfo.Parts[i].DecompressedPartSize {
+					return true
+				}
+			}
+		} else {
+			// An object might be initially uploaded as parts and then could have uploaded normally.
+			// And vice-versa applies.
+			return true
+		}
+		return false
+	}(objInfo, modObjInfo)
+
+	// If changed, reply back with errReadBlock error.
+	// ToDo - respond with a retry http status code thus making the http client to retry.
+        if compressSizeModified {
+		logger.LogIf(ctx, errReadBlock)
+		return toObjectErr(errReadBlock)
+	} 
+
 	return xl.getObject(ctx, bucket, object, startOffset, length, writer, etag)
 }
 
@@ -661,7 +703,7 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 		sizeWritten += file.Size
 
 		for i := range partsMetadata {
-			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size)
+			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size, 0)
 			partsMetadata[i].Erasure.AddChecksumInfo(ChecksumInfo{partName, file.Algorithm, file.Checksums[i]})
 		}
 

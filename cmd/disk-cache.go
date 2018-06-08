@@ -62,7 +62,7 @@ type cacheObjects struct {
 	// file path patterns to exclude from cache
 	exclude []string
 	// Object functions pointing to the corresponding functions of backend implementation.
-	GetObjectFn               func(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string) (err error)
+	GetObjectFn               func(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string, objInfo ObjectInfo) (err error)
 	GetObjectInfoFn           func(ctx context.Context, bucket, object string) (objInfo ObjectInfo, err error)
 	PutObjectFn               func(ctx context.Context, bucket, object string, data *hash.Reader, metadata map[string]string) (objInfo ObjectInfo, err error)
 	DeleteObjectFn            func(ctx context.Context, bucket, object string) error
@@ -93,14 +93,14 @@ type CacheObjectLayer interface {
 	ListBuckets(ctx context.Context) (buckets []BucketInfo, err error)
 	DeleteBucket(ctx context.Context, bucket string) error
 	// Object operations.
-	GetObject(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string) (err error)
+	GetObject(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string, objInfo ObjectInfo) (err error)
 	GetObjectInfo(ctx context.Context, bucket, object string) (objInfo ObjectInfo, err error)
 	PutObject(ctx context.Context, bucket, object string, data *hash.Reader, metadata map[string]string) (objInfo ObjectInfo, err error)
 	DeleteObject(ctx context.Context, bucket, object string) error
 
 	// Multipart operations.
 	NewMultipartUpload(ctx context.Context, bucket, object string, metadata map[string]string) (uploadID string, err error)
-	PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (info PartInfo, err error)
+	PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (info PartInfo, err error)
 	AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error
 	CompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, uploadedParts []CompletePart) (objInfo ObjectInfo, err error)
 
@@ -182,17 +182,17 @@ func (c cacheObjects) getMetadata(objInfo ObjectInfo) map[string]string {
 
 // Uses cached-object to serve the request. If object is not cached it serves the request from the backend and also
 // stores it in the cache for serving subsequent requests.
-func (c cacheObjects) GetObject(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string) (err error) {
+func (c cacheObjects) GetObject(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string, objectInfo ObjectInfo) (err error) {
 	GetObjectFn := c.GetObjectFn
 	GetObjectInfoFn := c.GetObjectInfoFn
 
 	if c.isCacheExclude(bucket, object) {
-		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag)
+		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag, objectInfo)
 	}
 	// fetch cacheFSObjects if object is currently cached or nearest available cache drive
 	dcache, err := c.cache.getCachedFSLoc(ctx, bucket, object)
 	if err != nil {
-		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag)
+		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag, objectInfo)
 	}
 	// stat object on backend
 	objInfo, err := GetObjectInfoFn(ctx, bucket, object)
@@ -206,27 +206,27 @@ func (c cacheObjects) GetObject(ctx context.Context, bucket, object string, star
 	}
 
 	if !backendDown && filterFromCache(objInfo.UserDefined) {
-		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag)
+		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag, objInfo)
 	}
 
 	cachedObjInfo, err := dcache.GetObjectInfo(ctx, bucket, object)
 	if err == nil {
 		if backendDown {
 			// If the backend is down, serve the request from cache.
-			return dcache.Get(ctx, bucket, object, startOffset, length, writer, etag)
+			return dcache.Get(ctx, bucket, object, startOffset, length, writer, etag, cachedObjInfo)
 		}
 		if cachedObjInfo.ETag == objInfo.ETag && !isStaleCache(objInfo) {
-			return dcache.Get(ctx, bucket, object, startOffset, length, writer, etag)
+			return dcache.Get(ctx, bucket, object, startOffset, length, writer, etag, cachedObjInfo)
 		}
 		dcache.Delete(ctx, bucket, object)
 	}
 	if startOffset != 0 || length != objInfo.Size {
 		// We don't cache partial objects.
-		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag)
+		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag, objInfo)
 	}
 	if !dcache.diskAvailable(objInfo.Size * cacheSizeMultiplier) {
 		// cache only objects < 1/100th of disk capacity
-		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag)
+		return GetObjectFn(ctx, bucket, object, startOffset, length, writer, etag, objInfo)
 	}
 	// Initialize pipe.
 	pipeReader, pipeWriter := io.Pipe()
@@ -235,7 +235,7 @@ func (c cacheObjects) GetObject(ctx context.Context, bucket, object string, star
 		return err
 	}
 	go func() {
-		if err = GetObjectFn(ctx, bucket, object, 0, objInfo.Size, io.MultiWriter(writer, pipeWriter), etag); err != nil {
+		if err = GetObjectFn(ctx, bucket, object, 0, objInfo.Size, io.MultiWriter(writer, pipeWriter), etag, objInfo); err != nil {
 			pipeWriter.CloseWithError(err)
 			return
 		}
@@ -663,7 +663,7 @@ func (c cacheObjects) NewMultipartUpload(ctx context.Context, bucket, object str
 }
 
 // PutObjectPart - uploads part to backend and cache simultaneously.
-func (c cacheObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (info PartInfo, err error) {
+func (c cacheObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (info PartInfo, err error) {
 	putObjectPartFn := c.PutObjectPartFn
 	dcache, err := c.cache.getCacheFS(ctx, bucket, object)
 	if err != nil {
@@ -713,7 +713,7 @@ func (c cacheObjects) PutObjectPart(ctx context.Context, bucket, object, uploadI
 		pinfoCh <- info
 	}()
 	go func() {
-		if _, perr := dcache.PutObjectPart(ctx, bucket, object, uploadID, partID, cHashReader); perr != nil {
+		if _, perr := dcache.PutObjectPart(ctx, bucket, object, uploadID, partID, cHashReader, 0); perr != nil {
 			wPipe.CloseWithError(perr)
 			return
 		}
@@ -889,8 +889,8 @@ func newServerCacheObjects(config CacheConfig) (CacheObjectLayer, error) {
 		cache:    dcache,
 		exclude:  config.Exclude,
 		listPool: newTreeWalkPool(globalLookupTimeout),
-		GetObjectFn: func(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string) error {
-			return newObjectLayerFn().GetObject(ctx, bucket, object, startOffset, length, writer, etag)
+		GetObjectFn: func(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string, objInfo ObjectInfo) error {
+			return newObjectLayerFn().GetObject(ctx, bucket, object, startOffset, length, writer, etag, objInfo)
 		},
 		GetObjectInfoFn: func(ctx context.Context, bucket, object string) (ObjectInfo, error) {
 			return newObjectLayerFn().GetObjectInfo(ctx, bucket, object)
@@ -917,7 +917,7 @@ func newServerCacheObjects(config CacheConfig) (CacheObjectLayer, error) {
 			return newObjectLayerFn().NewMultipartUpload(ctx, bucket, object, metadata)
 		},
 		PutObjectPartFn: func(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (info PartInfo, err error) {
-			return newObjectLayerFn().PutObjectPart(ctx, bucket, object, uploadID, partID, data)
+			return newObjectLayerFn().PutObjectPart(ctx, bucket, object, uploadID, partID, data, 0)
 		},
 		AbortMultipartUploadFn: func(ctx context.Context, bucket, object, uploadID string) error {
 			return newObjectLayerFn().AbortMultipartUpload(ctx, bucket, object, uploadID)

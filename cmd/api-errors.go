@@ -191,6 +191,7 @@ const (
 	ErrHealMissingBucket
 	ErrHealAlreadyRunning
 	ErrHealOverlappingPaths
+	ErrInvalidDecompressedSize
 )
 
 // error code to APIError structure, these fields carry respective
@@ -840,7 +841,11 @@ var errorCodeResponse = map[APIErrorCode]APIError{
 		Description:    "Object storage backend is unreachable",
 		HTTPStatusCode: http.StatusServiceUnavailable,
 	},
-
+	ErrInvalidDecompressedSize: {
+		Code: "XMinioInvalidDecompressedSize",
+		Description: "",
+		HTTPStatusCode:  http.StatusBadRequest,
+	},
 	// Add your error structure here.
 }
 
