@@ -64,7 +64,7 @@ func (fs *FSObjects) decodePartFile(name string) (partNumber int, etag string, e
 }
 
 // Appends parts to an appendFile sequentially.
-func (fs *FSObjects) backgroundAppend(ctx context.Context, bucket, object, uploadID string) {
+func (fs *FSObjects) backgroundAppend(ctx context.Context, bucket, object, uploadID string, partId int, decompressedPartSize int64) {
 	fs.appendFileMapMu.Lock()
 	logger.GetReqInfo(ctx).AppendTags("uploadID", uploadID)
 	file := fs.appendFileMap[uploadID]
@@ -79,11 +79,17 @@ func (fs *FSObjects) backgroundAppend(ctx context.Context, bucket, object, uploa
 	file.Lock()
 	defer file.Unlock()
 
+	// Preserving the decompressed part size in the append file.
+	if partId > 0 {
+		file.compressParts = append(file.compressParts, CompressPartInfo{PartNumber: partId,DecompressedPartSize: decompressedPartSize})
+	}
+
 	// Since we append sequentially nextPartNumber will always be len(file.parts)+1
 	nextPartNumber := len(file.parts) + 1
 	uploadIDDir := fs.getUploadIDDir(bucket, object, uploadID)
 
 	entries, err := readDir(uploadIDDir)
+	
 	if err != nil {
 		logger.GetReqInfo(ctx).AppendTags("uploadIDDir", uploadIDDir)
 		logger.LogIf(ctx, err)
@@ -118,7 +124,6 @@ func (fs *FSObjects) backgroundAppend(ctx context.Context, bucket, object, uploa
 			logger.LogIf(ctx, err)
 			return
 		}
-
 		file.parts = append(file.parts, PartInfo{PartNumber: nextPartNumber, ETag: etag})
 		nextPartNumber++
 	}
@@ -257,7 +262,7 @@ func (fs *FSObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, d
 
 	// Initialize pipe.
 	go func() {
-		if gerr := fs.GetObject(ctx, srcBucket, srcObject, startOffset, length, srcInfo.Writer, srcInfo.ETag); gerr != nil {
+		if gerr := fs.GetObject(ctx, srcBucket, srcObject, startOffset, length, srcInfo.Writer, srcInfo.ETag, srcInfo); gerr != nil {
 			if gerr = srcInfo.Writer.Close(); gerr != nil {
 				logger.LogIf(ctx, gerr)
 				return
@@ -271,7 +276,16 @@ func (fs *FSObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, d
 		}
 	}()
 
-	partInfo, err := fs.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.Reader)
+	// Reading the decompressedPartSize from fs.json.
+	var decompressedPartSize int64
+	for _, part := range srcInfo.Parts {
+		if part.Number == partID {
+			decompressedPartSize = part.DecompressedPartSize
+			break
+		}
+	}
+
+	partInfo, err := fs.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.Reader, decompressedPartSize)
 	if err != nil {
 		return pi, toObjectErr(err, dstBucket, dstObject)
 	}
@@ -283,7 +297,8 @@ func (fs *FSObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, d
 // an ongoing multipart transaction. Internally incoming data is
 // written to '.minio.sys/tmp' location and safely renamed to
 // '.minio.sys/multipart' for reach parts.
-func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (pi PartInfo, e error) {
+func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedPartSize int64) (pi PartInfo, e error) {
+	
 	if err := checkPutObjectPartArgs(ctx, bucket, object, fs); err != nil {
 		return pi, toObjectErr(err, bucket)
 	}
@@ -293,7 +308,7 @@ func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID
 	}
 
 	// Validate input data size and it can never be less than zero.
-	if data.Size() < 0 {
+	if data.Size() < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return pi, toObjectErr(errInvalidArgument)
 	}
@@ -324,11 +339,11 @@ func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID
 
 	// Should return IncompleteBody{} error when reader has fewer
 	// bytes than specified in request header.
+	// Avoid the check if compression is enabled.
 	if bytesWritten < data.Size() {
 		fsRemoveFile(ctx, tmpPartPath)
 		return pi, IncompleteBody{}
 	}
-
 	// Delete temporary part in case of failure. If
 	// PutObjectPart succeeds then there would be nothing to
 	// delete in which case we just ignore the error.
@@ -344,7 +359,7 @@ func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID
 		return pi, toObjectErr(err, minioMetaMultipartBucket, partPath)
 	}
 
-	go fs.backgroundAppend(ctx, bucket, object, uploadID)
+	go fs.backgroundAppend(ctx, bucket, object, uploadID, partID, decompressedPartSize)
 
 	fi, err := fsStatFile(ctx, partPath)
 	if err != nil {
@@ -573,7 +588,9 @@ func (fs *FSObjects) CompleteMultipartUpload(ctx context.Context, bucket string,
 	// 1. The last PutObjectPart triggers go-routine fs.backgroundAppend, this go-routine has not started yet.
 	// 2. Now CompleteMultipartUpload gets called which sees that lastPart is not appended and starts appending
 	//    from the beginning
-	fs.backgroundAppend(ctx, bucket, object, uploadID)
+	
+	fs.backgroundAppend(ctx, bucket, object, uploadID, 0, 0)
+	
 
 	fs.appendFileMapMu.Lock()
 	file := fs.appendFileMap[uploadID]
@@ -583,6 +600,18 @@ func (fs *FSObjects) CompleteMultipartUpload(ctx context.Context, bucket string,
 	if file != nil {
 		file.Lock()
 		defer file.Unlock()
+		// Assign the decompressedInfo to the metadata.
+		if len(file.compressParts) == len(parts) {
+			for i := range parts {
+				for j := range file.compressParts {
+					if fsMeta.Parts[i].Number == file.compressParts[j].PartNumber {
+						fsMeta.Parts[i].DecompressedPartSize = file.compressParts[j].DecompressedPartSize
+						break
+					}
+				}
+			}
+		}
+		
 		// Verify that appendFile has all the parts.
 		if len(file.parts) == len(parts) {
 			for i := range parts {

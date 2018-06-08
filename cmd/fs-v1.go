@@ -28,7 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
+	
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/hash"
 	"github.com/minio/minio/pkg/lock"
@@ -75,6 +75,7 @@ type FSObjects struct {
 type fsAppendFile struct {
 	sync.Mutex
 	parts    []PartInfo // List of parts appended.
+	compressParts []CompressPartInfo
 	filePath string     // Absolute path of the file in the temp location.
 }
 
@@ -500,7 +501,8 @@ func (fs *FSObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dstBu
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (fs *FSObjects) GetObject(ctx context.Context, bucket, object string, offset int64, length int64, writer io.Writer, etag string) (err error) {
+func (fs *FSObjects) GetObject(ctx context.Context, bucket, object string, offset int64, length int64, writer io.Writer, etag string, objInfo ObjectInfo) (err error) {
+	
 	if err = checkGetObjArgs(ctx, bucket, object); err != nil {
 		return err
 	}
@@ -512,6 +514,48 @@ func (fs *FSObjects) GetObject(ctx context.Context, bucket, object string, offse
 		return err
 	}
 	defer objectLock.RUnlock()
+
+	if !isCompressed(objInfo.UserDefined) {
+		return fs.getObject(ctx, bucket, object, offset, length, writer, etag, true)
+	}
+
+	// Preserving the read-write rule.
+	// The read operation is blocked if changes in the decompressedSize is detected.
+	// Allowing this will cause data corruption , as the data is changed during the run.
+	modObjInfo, err := fs.getObjectInfo(ctx, bucket, object)
+	if err != nil {
+		logger.LogIf(ctx, err)
+		return err
+	}
+	// Check whether the decompressed size is changed.
+	compressSizeModified := func(objInfo ObjectInfo, modObjInfo ObjectInfo) bool {
+		if len(objInfo.Parts) == 0 && len(modObjInfo.Parts) == 0 {
+			objDecompressedSize := getDecompressedSize(objInfo)
+			modDecompressedSize := getDecompressedSize(modObjInfo)
+			if objDecompressedSize > 0 || modDecompressedSize > 0 {
+				if objDecompressedSize != modDecompressedSize { return true }
+			}
+		} else if len(objInfo.Parts) > 0 && len(modObjInfo.Parts) > 0 {
+			for i,part := range objInfo.Parts {
+				if part.DecompressedPartSize != modObjInfo.Parts[i].DecompressedPartSize {
+					return true
+				}
+			}
+		} else {
+			// An object might be initially uploaded as parts and then could have uploaded normally.
+			// And vice-versa applies.
+			return true
+		}
+		return false
+	}(objInfo, modObjInfo)
+
+	// If changed, reply back with errReadBlock error.
+	// ToDo - respond with a retry http status code thus making the http client retry.
+        if compressSizeModified {
+		logger.LogIf(ctx, errReadBlock)
+		return toObjectErr(errReadBlock)
+	} 
+
 	return fs.getObject(ctx, bucket, object, offset, length, writer, etag, true)
 }
 
@@ -592,6 +636,9 @@ func (fs *FSObjects) getObject(ctx context.Context, bucket, object string, offse
 	buf := make([]byte, int(bufSize))
 
 	_, err = io.CopyBuffer(writer, io.LimitReader(reader, length), buf)
+	if err == io.ErrClosedPipe {
+		err = nil
+	}
 	logger.LogIf(ctx, err)
 	return toObjectErr(err, bucket, object)
 }
@@ -780,7 +827,6 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 
 	fsMeta := newFSMetaV1()
 	fsMeta.Meta = meta
-
 	// This is a special case with size as '0' and object ends
 	// with a slash separator, we treat it like a valid operation
 	// and return success.
@@ -812,7 +858,7 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 	}
 
 	// Validate input data size and it can never be less than zero.
-	if data.Size() < 0 {
+	if data.Size() < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return ObjectInfo{}, errInvalidArgument
 	}
@@ -865,7 +911,6 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 		fsRemoveFile(ctx, fsTmpObjPath)
 		return ObjectInfo{}, IncompleteBody{}
 	}
-
 	// Delete the temporary object in the case of a
 	// failure. If PutObject succeeds, then there would be
 	// nothing to delete.

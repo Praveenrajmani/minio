@@ -223,11 +223,13 @@ func parseFSPartsArray(fsMetaBuf []byte) []objectPartInfo {
 		name := gjson.Get(partJSON, "name").String()
 		etag := gjson.Get(partJSON, "etag").String()
 		size := gjson.Get(partJSON, "size").Int()
+		decompressedPartSize := gjson.Get(partJSON, "decompressedPartSize").Int()
 		partsArray = append(partsArray, objectPartInfo{
 			Number: int(number),
 			Name:   name,
 			ETag:   etag,
 			Size:   size,
+			DecompressedPartSize: int64(decompressedPartSize),
 		})
 		return true
 	})

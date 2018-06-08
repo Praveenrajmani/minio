@@ -391,7 +391,8 @@ func (l *b2Objects) ListObjectsV2(ctx context.Context, bucket, prefix, continuat
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (l *b2Objects) GetObject(ctx context.Context, bucket string, object string, startOffset int64, length int64, writer io.Writer, etag string) error {
+func (l *b2Objects) GetObject(ctx context.Context, bucket string, object string, startOffset int64, length int64, writer io.Writer, etag string, objInfo minio.ObjectInfo) error {
+	
 	bkt, err := l.Bucket(ctx, bucket)
 	if err != nil {
 		return err
@@ -618,7 +619,7 @@ func (l *b2Objects) NewMultipartUpload(ctx context.Context, bucket string, objec
 }
 
 // PutObjectPart puts a part of object in bucket, uses B2's LargeFile upload API.
-func (l *b2Objects) PutObjectPart(ctx context.Context, bucket string, object string, uploadID string, partID int, data *h2.Reader) (pi minio.PartInfo, err error) {
+func (l *b2Objects) PutObjectPart(ctx context.Context, bucket string, object string, uploadID string, partID int, data *h2.Reader, decompressedSize int64) (pi minio.PartInfo, err error) {
 	bkt, err := l.Bucket(ctx, bucket)
 	if err != nil {
 		return pi, err

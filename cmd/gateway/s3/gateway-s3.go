@@ -21,7 +21,7 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
-
+	
 	"github.com/minio/cli"
 	miniogo "github.com/minio/minio-go"
 	"github.com/minio/minio-go/pkg/s3utils"
@@ -286,7 +286,7 @@ func (l *s3Objects) ListObjectsV2(ctx context.Context, bucket, prefix, continuat
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (l *s3Objects) GetObject(ctx context.Context, bucket string, key string, startOffset int64, length int64, writer io.Writer, etag string) error {
+func (l *s3Objects) GetObject(ctx context.Context, bucket string, key string, startOffset int64, length int64, writer io.Writer, etag string, objInfo minio.ObjectInfo) error {
 	if length < 0 && length != -1 {
 		logger.LogIf(ctx, minio.InvalidRange{})
 		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucket, key)
@@ -384,7 +384,7 @@ func (l *s3Objects) NewMultipartUpload(ctx context.Context, bucket string, objec
 }
 
 // PutObjectPart puts a part of object in bucket
-func (l *s3Objects) PutObjectPart(ctx context.Context, bucket string, object string, uploadID string, partID int, data *hash.Reader) (pi minio.PartInfo, e error) {
+func (l *s3Objects) PutObjectPart(ctx context.Context, bucket string, object string, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (pi minio.PartInfo, e error) {
 	info, err := l.Client.PutObjectPart(bucket, object, uploadID, partID, data, data.Size(), data.MD5Base64String(), data.SHA256HexString())
 	if err != nil {
 		logger.LogIf(ctx, err)

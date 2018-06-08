@@ -284,7 +284,16 @@ func (xl xlObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, ds
 		}
 	}()
 
-	partInfo, err := xl.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.Reader)
+	// Reading the decompressedPartSize from fs.json.
+	var decompressedPartSize int64
+	for _, part := range srcInfo.Parts {
+		if part.Number == partID {
+			decompressedPartSize = part.DecompressedPartSize
+			break
+		}
+	}
+
+	partInfo, err := xl.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.Reader, decompressedPartSize)
 	if err != nil {
 		return pi, toObjectErr(err, dstBucket, dstObject)
 	}
@@ -298,13 +307,13 @@ func (xl xlObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, ds
 // of the multipart transaction.
 //
 // Implements S3 compatible Upload Part API.
-func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (pi PartInfo, e error) {
+func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (pi PartInfo, e error) {
 	if err := checkPutObjectPartArgs(ctx, bucket, object, xl); err != nil {
 		return pi, err
 	}
 
 	// Validate input data size and it can never be less than zero.
-	if data.Size() < 0 {
+	if data.Size() < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return pi, toObjectErr(errInvalidArgument)
 	}
@@ -362,7 +371,7 @@ func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID 
 
 	// Delete the temporary object part. If PutObjectPart succeeds there would be nothing to delete.
 	defer xl.deleteObject(ctx, minioMetaTmpBucket, tmpPart)
-	if data.Size() > 0 {
+	if data.Size() > 0 || data.Size() == -1 {
 		if pErr := xl.prepareFile(ctx, minioMetaTmpBucket, tmpPartPath, data.Size(), onlineDisks, xlMeta.Erasure.BlockSize, xlMeta.Erasure.DataBlocks, writeQuorum); err != nil {
 			return pi, toObjectErr(pErr, bucket, object)
 
@@ -379,6 +388,9 @@ func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID 
 	switch size := data.Size(); {
 	case size == 0:
 		buffer = make([]byte, 1) // Allocate atleast a byte to reach EOF
+	case size == -1:
+		buffer = xl.bp.Get()
+		defer xl.bp.Put(buffer)
 	case size < blockSizeV1:
 		// No need to allocate fully blockSizeV1 buffer if the incoming data is smaller.
 		buffer = make([]byte, size, 2*size)
@@ -398,7 +410,6 @@ func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID 
 		logger.LogIf(ctx, IncompleteBody{})
 		return pi, IncompleteBody{}
 	}
-
 	// post-upload check (write) lock
 	postUploadIDLock := xl.nsMutex.NewNSLock(minioMetaMultipartBucket, uploadIDPath)
 	if err = postUploadIDLock.GetLock(globalOperationTimeout); err != nil {
@@ -440,7 +451,7 @@ func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID 
 	md5hex := hex.EncodeToString(data.MD5Current())
 
 	// Add the current part.
-	xlMeta.AddObjectPart(partID, partSuffix, md5hex, file.Size)
+	xlMeta.AddObjectPart(partID, partSuffix, md5hex, file.Size, decompressedSize)
 
 	for i, disk := range onlineDisks {
 		if disk == OfflineDisk {
@@ -653,7 +664,7 @@ func (xl xlObjects) CompleteMultipartUpload(ctx context.Context, bucket string, 
 			logger.LogIf(ctx, InvalidPart{})
 			return oi, InvalidPart{}
 		}
-
+		 
 		// All parts should have same ETag as previously generated.
 		if currentXLMeta.Parts[partIdx].ETag != part.ETag {
 			logger.LogIf(ctx, InvalidPart{})
@@ -690,6 +701,7 @@ func (xl xlObjects) CompleteMultipartUpload(ctx context.Context, bucket string, 
 			ETag:   part.ETag,
 			Size:   currentXLMeta.Parts[partIdx].Size,
 			Name:   fmt.Sprintf("part.%d", part.PartNumber),
+			DecompressedPartSize:  currentXLMeta.Parts[partIdx].DecompressedPartSize,
 		}
 	}
 
