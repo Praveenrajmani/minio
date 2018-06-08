@@ -29,6 +29,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"errors"
+	"strconv"
 
 	"cloud.google.com/go/storage"
 	humanize "github.com/dustin/go-humanize"
@@ -47,6 +49,9 @@ import (
 	minio "github.com/minio/minio/cmd"
 )
 
+var errReadBlock = errors.New("Read has been blocked as changes are detected in the data during the run, please try again")
+const ReservedMetadataPrefix = "X-Minio-Internal-"
+
 var (
 	// Project ID format is not valid.
 	errGCSInvalidProjectID = fmt.Errorf("GCS project id is either empty or invalid")
@@ -56,6 +61,7 @@ var (
 
 	// Invalid format.
 	errGCSFormat = fmt.Errorf("Unknown format")
+
 )
 
 const (
@@ -729,7 +735,42 @@ func (l *gcsGateway) ListObjectsV2(ctx context.Context, bucket, prefix, continua
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (l *gcsGateway) GetObject(ctx context.Context, bucket string, key string, startOffset int64, length int64, writer io.Writer, etag string) error {
+func (l *gcsGateway) GetObject(ctx context.Context, bucket string, key string, startOffset int64, length int64, writer io.Writer, etag string, objInfo minio.ObjectInfo) error {
+
+	if isCompressed(objInfo.UserDefined) {
+		modObjInfo, err := l.GetObjectInfo(ctx, bucket, key)
+		if err != nil {
+			logger.LogIf(ctx, err)
+			return err
+		}
+
+		compressSizeModified := func(objInfo minio.ObjectInfo, modObjInfo minio.ObjectInfo) bool {
+			if len(objInfo.Parts) == 0 && len(modObjInfo.Parts) == 0 {
+				objDecompressedSize := getDecompressedSize(objInfo)
+				modDecompressedSize := getDecompressedSize(modObjInfo)
+				if objDecompressedSize > 0 || modDecompressedSize > 0 {
+					if objDecompressedSize != modDecompressedSize { return true }
+				}
+			} else if len(objInfo.Parts) > 0 && len(modObjInfo.Parts) > 0 {
+				for i,part := range objInfo.Parts {
+					if part.DecompressedPartSize != modObjInfo.Parts[i].DecompressedPartSize {
+						return true
+					}
+				}
+			} else {
+				// An object might be initially uploaded as parts and then could have uploaded normally.
+				// And vice-versa applies.
+				return true
+			}
+			return false
+		}(objInfo, modObjInfo)
+
+		if compressSizeModified {
+			logger.LogIf(ctx, errReadBlock)
+			return errReadBlock
+		}
+	}
+
 	// if we want to mimic S3 behavior exactly, we need to verify if bucket exists first,
 	// otherwise gcs will just return object not exist in case of non-existing bucket
 	if _, err := l.client.Bucket(bucket).Attrs(l.ctx); err != nil {
@@ -752,6 +793,33 @@ func (l *gcsGateway) GetObject(ctx context.Context, bucket string, key string, s
 
 	return nil
 }
+
+// Returns true if the object is compressed.
+func isCompressed(metadata map[string]string) bool {
+	_, ok := metadata[ReservedMetadataPrefix+"compression"]
+	return ok
+}
+
+// Extract decompressedSize from meta json.
+func getDecompressedSize(objInfo minio.ObjectInfo) int64 {
+	if len(objInfo.Parts) == 0 {
+		metadata := objInfo.UserDefined
+		if sizeStr, ok := metadata[ReservedMetadataPrefix+"decompressedSize"]; ok {
+			size, err := strconv.ParseInt(sizeStr,10,64)
+			if err == nil {
+				return size
+			}
+		}
+		return 0
+	} else {
+		var totalPartSize int64 
+		for _, part := range objInfo.Parts {
+			totalPartSize += part.DecompressedPartSize
+		}
+		return totalPartSize
+	}
+} 
+
 
 // fromGCSAttrsToObjectInfo converts GCS BucketAttrs to gateway ObjectInfo
 func fromGCSAttrsToObjectInfo(attrs *storage.ObjectAttrs) minio.ObjectInfo {
@@ -938,7 +1006,7 @@ func (l *gcsGateway) checkUploadIDExists(ctx context.Context, bucket string, key
 }
 
 // PutObjectPart puts a part of object in bucket
-func (l *gcsGateway) PutObjectPart(ctx context.Context, bucket string, key string, uploadID string, partNumber int, data *hash.Reader) (minio.PartInfo, error) {
+func (l *gcsGateway) PutObjectPart(ctx context.Context, bucket string, key string, uploadID string, partNumber int, data *hash.Reader, decompressedSize int64) (minio.PartInfo, error) {
 	if err := l.checkUploadIDExists(ctx, bucket, key, uploadID); err != nil {
 		return minio.PartInfo{}, err
 	}
