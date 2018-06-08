@@ -179,4 +179,10 @@ Example 1:
 		"Please contact Minio at https://slack.minio.io",
 		"",
 	)
+
+	uiErrInvalidCompressionExcludesValue = newUIErrFn(
+		"Invalid compression exclude value",
+		"Please check the passed value",
+		"MINIO_DONOTCOMPRESS: Compress exclusion patterns are delimited by `,`",
+	)
 )
