@@ -115,3 +115,13 @@ func parseCacheExcludes(excludes []string) ([]string, error) {
 	}
 	return excludes, nil
 }
+
+// Parses the given compression env list `extensions` or `content-types`.
+func parseCompressExcludes(excludes []string) ([]string, error) {
+	for _, e := range excludes {
+		if len(e) == 0 {
+			return nil, uiErrInvalidCompressionExcludesValue(nil).Msg("extension/content-type (%s) cannot be empty", e)
+		}
+	}
+	return excludes, nil
+}

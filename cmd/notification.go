@@ -530,7 +530,7 @@ func sendEvent(args eventArgs) {
 }
 
 func saveConfig(objAPI ObjectLayer, configFile string, data []byte) error {
-	hashReader, err := hash.NewReader(bytes.NewReader(data), int64(len(data)), "", getSHA256Hash(data))
+	hashReader, err := hash.NewReader(bytes.NewReader(data), int64(len(data)), "", getSHA256Hash(data), int64(len(data)))
 	if err != nil {
 		return err
 	}
@@ -543,6 +543,7 @@ var errConfigNotFound = errors.New("config file not found")
 
 func readConfig(ctx context.Context, objAPI ObjectLayer, configFile string) (*bytes.Buffer, error) {
 	var buffer bytes.Buffer
+
 	// Read entire content by setting size to -1
 	err := objAPI.GetObject(ctx, minioMetaBucket, configFile, 0, -1, &buffer, "")
 	if err != nil {

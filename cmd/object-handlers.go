@@ -30,7 +30,10 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 
+	snappy "github.com/golang/snappy"
 	"github.com/gorilla/mux"
 	miniogo "github.com/minio/minio-go"
 	"github.com/minio/minio/cmd/logger"
@@ -54,6 +57,10 @@ var supportedHeadGetReqParams = map[string]string{
 	"response-content-disposition": "Content-Disposition",
 }
 
+const (
+	compressionAlgorithm = "golang/snappy/LZ77"
+)
+
 // setHeadGetRespHeaders - set any requested parameters as response headers.
 func setHeadGetRespHeaders(w http.ResponseWriter, reqParams url.Values) {
 	for k, v := range reqParams {
@@ -71,6 +78,8 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	ctx := newContext(r, w, "GetObject")
 
 	var object, bucket string
+	var wg sync.WaitGroup
+
 	vars := mux.Vars(r)
 	bucket = vars["bucket"]
 	object = vars["object"]
@@ -122,6 +131,21 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	var actualSize int64
+	var compressedSize int64
+	if isCompressed(objInfo.UserDefined) {
+		// Read the decompressed size from the meta.json.
+		actualSize = getDecompressedSize(objInfo)
+		if actualSize < 0 {
+			writeErrorResponse(w, ErrInvalidDecompressedSize, r.URL)
+			return
+		}
+		// Preserve the compressed size.
+		compressedSize = objInfo.Size
+		// Set the info.Size to the actualSize.
+		objInfo.Size = actualSize
+	}
+
 	// Get request range.
 	var hrange *httpRange
 	rangeHeader := r.Header.Get("Range")
@@ -153,11 +177,82 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	var writer io.Writer
-	writer = w
+	var rd *io.PipeReader
+	var wt *io.PipeWriter
+	var responseWriter io.Writer
+
+	if isCompressed(objInfo.UserDefined) {
+		var reader io.Reader
+		responseWriter = w
+
+		// Open a pipe for compression
+		// Where wt is actually passed to the getObject
+		rd, wt = io.Pipe()
+		writer = wt
+		reader = snappy.NewReader(rd)
+		defer wt.Close()
+
+		// Defaulting the length and startOffset.
+		// Incase of range based queries, the entire data is read to the pipeWriter.
+		// So that range is set on the decompressed data.
+		snappyStartOffset := startOffset
+		snappyLength := length
+		length = compressedSize
+		startOffset = 0
+
+		// Validate the range.
+		if hrange != nil {
+			// For negative length we read everything.
+			if snappyLength < 0 {
+				snappyLength = actualSize - snappyStartOffset
+			}
+
+			// Reply back invalid range if the input offset and length fall out of range.
+			if snappyStartOffset > actualSize || snappyStartOffset+snappyLength > actualSize {
+				writeErrorResponse(w, ErrInvalidRange, r.URL)
+				return
+			}
+		}
+
+		go func() {
+			wg.Add(1)
+			defer wg.Done()
+			if hrange != nil {
+				// Close the pipe writer if the data is read already.
+				// This will happen incase of range queries, If the range is satisfied.
+				// Closing the pipe, releases the writer passed to the getObject.
+				defer wt.Close()
+				// Discarding the data till the startOffset, if the range is enabled.
+				// goioutil.Discard imitates a dummy writer.
+				if _, err = io.CopyN(goioutil.Discard, reader, snappyStartOffset); err != nil {
+					//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+					return
+				}
+				objInfo.Size = snappyLength
+			}
+			setObjectHeaders(w, objInfo, hrange)
+			setHeadGetRespHeaders(w, r.URL.Query())
+			// Finally, writes to the client.
+			// The limit is set to the decompressed size if the range is disabled.
+			if _, err = io.CopyN(responseWriter, reader, snappyLength); err != nil {
+				wt.Close()
+				//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				return
+			}
+			wt.Close()
+		}()
+	} else {
+		// The objectInfo.Size is not modified.
+		writer = w
+		setObjectHeaders(w, objInfo, hrange)
+		setHeadGetRespHeaders(w, r.URL.Query())
+	}
+
 	if objectAPI.IsEncryptionSupported() {
 		if hasSSECustomerHeader(r.Header) {
 			// Response writer should be limited early on for decryption upto required length,
 			// additionally also skipping mod(offset)64KiB boundaries.
+
 			writer = ioutil.LimitedWriter(writer, startOffset%(64*1024), length)
 
 			writer, startOffset, length, err = DecryptBlocksRequest(writer, r, bucket, object, startOffset, length, objInfo, false)
@@ -171,29 +266,41 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	setObjectHeaders(w, objInfo, hrange)
-	setHeadGetRespHeaders(w, r.URL.Query())
-	httpWriter := ioutil.WriteOnClose(writer)
-
 	getObject := objectAPI.GetObject
 	if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
 		getObject = api.CacheAPI().GetObject
 	}
 
-	// Reads the object at startOffset and writes to mw.
+	httpWriter := ioutil.WriteOnClose(writer)
+	// Reads the object at startOffset and writes to objectWriter.
+
 	if err = getObject(ctx, bucket, object, startOffset, length, httpWriter, objInfo.ETag); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+		}
+		if isCompressed(objInfo.UserDefined) {
+			wt.Close()
+			// Wait till the copy go-routines retire.
+			wg.Wait()
 		}
 		httpWriter.Close()
 		return
 	}
 
 	if err = httpWriter.Close(); err != nil {
+		wt.Close()
+		// Wait till the copy go-routines retire.
+		wg.Wait()
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
 		}
+	}
+
+	if isCompressed(objInfo.UserDefined) {
+		wt.Close()
+		// Wait till the copy go-routines retire.
+		wg.Wait()
 	}
 
 	// Get host and port from Request.RemoteAddr.
@@ -262,6 +369,17 @@ func (api objectAPIHandlers) HeadObjectHandler(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		writeErrorResponseHeadersOnly(w, toAPIErrorCode(err))
 		return
+	}
+
+	if isCompressed(objInfo.UserDefined) {
+		// Read the decompressed size from the meta.json.
+		actualSize := getDecompressedSize(objInfo)
+		if actualSize < 0 {
+			writeErrorResponse(w, ErrInvalidDecompressedSize, r.URL)
+			return
+		}
+		// Set the info.Size to the actualSize.
+		objInfo.Size = actualSize
 	}
 
 	if objectAPI.IsEncryptionSupported() {
@@ -424,7 +542,7 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 	var writer io.WriteCloser = pipeWriter
 	var reader io.Reader = pipeReader
 
-	srcInfo.Reader, err = hash.NewReader(reader, srcInfo.Size, "", "")
+	srcInfo.Reader, err = hash.NewReader(reader, srcInfo.Size, "", "", srcInfo.Size)
 	if err != nil {
 		pipeWriter.CloseWithError(err)
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
@@ -434,6 +552,16 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 	// Save the original size for later use when we want to copy
 	// encrypted file into an unencrypted one.
 	size := srcInfo.Size
+	var actualSize int64
+	if isCompressed(srcInfo.UserDefined) {
+		// Validate the fitness of decompression.
+		actualSize = getDecompressedSize(srcInfo)
+		if actualSize < 0 {
+			writeErrorResponse(w, ErrInvalidDecompressedSize, r.URL)
+			return
+		}
+		srcInfo.UserDefined[ReservedMetadataPrefix+"actualSize"] = strconv.FormatInt(actualSize, 10)
+	}
 
 	var encMetadata = make(map[string]string)
 	if objectAPI.IsEncryptionSupported() {
@@ -503,7 +631,7 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 					size = srcInfo.EncryptedSize()
 				}
 			}
-			srcInfo.Reader, err = hash.NewReader(reader, size, "", "") // do not try to verify encrypted content
+			srcInfo.Reader, err = hash.NewReader(reader, size, "", "", srcInfo.Size) // do not try to verify encrypted content
 			if err != nil {
 				pipeWriter.CloseWithError(err)
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
@@ -620,6 +748,10 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 	host, port, err := net.SplitHostPort(handlers.GetSourceIP(r))
 	if err != nil {
 		host, port = "", ""
+	}
+
+	if isCompressed(srcInfo.UserDefined) {
+		objInfo.Size = actualSize
 	}
 
 	// Notify object created event.
@@ -772,7 +904,48 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
+	storageInfo := objectAPI.StorageInfo(context.Background())
+
+	var hashError error
+	var rd *io.PipeReader
+	var wt *io.PipeWriter
+	actualSize := size
+
+	// Disabling compression for encrypted enabled requests.
+	// Using compression and encryption together enables room for side channel attacks.
+	// Eliminate non-compressible objects by extensions/content-types.
+	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown && !excludeForCompression(bucket, object, r.Header) && size > 0 {
+		// Storing the compression metadata.
+		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+		metadata[ReservedMetadataPrefix+"actualSize"] = strconv.FormatInt(size, 10)
+
+		rd, wt = io.Pipe()
+		snappyWriter := snappy.NewWriter(wt)
+
+		lreader, err := hash.NewReader(reader, size, md5hex, sha256hex, actualSize)
+		if err != nil {
+			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			return
+		}
+		go func() {
+			defer wt.Close()
+			defer snappyWriter.Close()
+			// Writing to the compressed writer.
+			_, err = io.CopyN(snappyWriter, lreader, actualSize)
+			if err != nil {
+				hashError = err
+				//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				return
+			}
+		}()
+		// Set compression metrics.
+		size = -1
+		md5hex = "" // Do not try to verify the content.
+		sha256hex = ""
+		reader = rd
+	}
+
+	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex, actualSize)
 	if err != nil {
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
@@ -794,7 +967,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 				return
 			}
 			info := ObjectInfo{Size: size}
-			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "") // do not try to verify encrypted content
+			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "", size) // do not try to verify encrypted content
 			if err != nil {
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 				return
@@ -813,12 +986,22 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if isCompressed(objInfo.UserDefined) {
+		// Ignore compressed ETag.
+		objInfo.ETag = "-" + objInfo.ETag
+	}
+
 	w.Header().Set("ETag", "\""+objInfo.ETag+"\"")
 	if objectAPI.IsEncryptionSupported() {
 		if hasSSECustomerHeader(r.Header) {
 			w.Header().Set(SSECustomerAlgorithm, r.Header.Get(SSECustomerAlgorithm))
 			w.Header().Set(SSECustomerKeyMD5, r.Header.Get(SSECustomerKeyMD5))
 		}
+	}
+
+	if hashError != nil {
+		writeErrorResponse(w, toAPIErrorCode(hashError), r.URL)
+		return
 	}
 
 	writeSuccessResponseHeadersOnly(w)
@@ -913,6 +1096,12 @@ func (api objectAPIHandlers) NewMultipartUploadHandler(w http.ResponseWriter, r 
 		metadata[k] = v
 	}
 
+	storageInfo := objectAPI.StorageInfo(context.Background())
+	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
+		// Storing the compression metadata.
+		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+	}
+
 	newMultipartUpload := objectAPI.NewMultipartUpload
 	if api.CacheAPI() != nil {
 		newMultipartUpload = api.CacheAPI().NewMultipartUpload
@@ -984,6 +1173,15 @@ func (api objectAPIHandlers) CopyObjectPartHandler(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Reading the actualSize from meta json.
+	var actualPartSize int64
+	for _, part := range srcInfo.Parts {
+		if part.Number == partID {
+			actualPartSize = part.ActualSize
+			break
+		}
+	}
+
 	// Deny if WORM is enabled
 	if globalWORMEnabled {
 		if _, err = objectAPI.GetObjectInfo(ctx, dstBucket, dstObject); err == nil {
@@ -999,9 +1197,25 @@ func (api objectAPIHandlers) CopyObjectPartHandler(w http.ResponseWriter, r *htt
 		}
 	}
 
+	rangeHeader := r.Header.Get("x-amz-copy-source-range")
+
+	var actualSize int64
+	var compressedSize int64
+	if isCompressed(srcInfo.UserDefined) && rangeHeader != "" {
+		// Read the decompressed size from the meta.json.
+		actualSize = getDecompressedSize(srcInfo)
+		if actualSize < 0 {
+			writeErrorResponse(w, ErrInvalidDecompressedSize, r.URL)
+			return
+		}
+		// Preserve the compressed size.
+		compressedSize = srcInfo.Size
+		// Set the info.Size to the actualSize.
+		srcInfo.Size = actualSize
+	}
+
 	// Get request range.
 	var hrange *httpRange
-	rangeHeader := r.Header.Get("x-amz-copy-source-range")
 	if rangeHeader != "" {
 		if hrange, err = parseCopyPartRange(rangeHeader, srcInfo.Size); err != nil {
 			// Handle only errInvalidRange
@@ -1024,6 +1238,7 @@ func (api objectAPIHandlers) CopyObjectPartHandler(w http.ResponseWriter, r *htt
 	if hrange != nil {
 		length = hrange.getLength()
 		startOffset = hrange.offsetBegin
+		actualPartSize = length
 	}
 
 	/// maximum copy size for multipart objects in a single operation
@@ -1036,15 +1251,66 @@ func (api objectAPIHandlers) CopyObjectPartHandler(w http.ResponseWriter, r *htt
 	pipeReader, pipeWriter := io.Pipe()
 
 	var writer io.WriteCloser = pipeWriter
-	var reader io.Reader = pipeReader
-	var getLength = length
-	srcInfo.Reader, err = hash.NewReader(reader, length, "", "")
+	var reader io.Reader
+	var getLength int64
+	// Need to decompress only for range-enabled copy parts.
+	// Hijacks the pipeWriter, decompresses the data to fit the range.
+	// And configures the srcInfo.Reader to be passed to the object layer.
+	if isCompressed(srcInfo.UserDefined) && hrange != nil {
+		var sreader io.Reader
+		var swriter io.Writer
+
+		snappyStartOffset := startOffset
+		snappyLength := length
+		getLength = compressedSize
+		startOffset = 0
+
+		// Validate the range.
+		// For negative length we read everything.
+		if snappyLength < 0 {
+			snappyLength = actualSize - snappyStartOffset
+		}
+		// Reply back invalid range if the input offset and length fall out of range.
+		if snappyStartOffset > actualSize || snappyStartOffset+snappyLength > actualSize {
+			writeErrorResponse(w, ErrInvalidRange, r.URL)
+			return
+		}
+
+		// Open a pipe for compression.
+		// Where snappyWriter is piped to srcInfo.Reader.
+		// pipeReader writes to snappyWriter.
+		snappyReader, snappyWriter := io.Pipe()
+		reader = snappyReader
+		length = -1
+
+		swriter = snappy.NewWriter(snappyWriter)
+		sreader = snappy.NewReader(pipeReader)
+
+		go func() {
+			defer writer.Close()
+			defer snappyWriter.Close()
+			if _, err = io.CopyN(goioutil.Discard, sreader, snappyStartOffset); err != nil {
+				//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				return
+			}
+			if _, err = io.CopyN(swriter, sreader, snappyLength); err != nil {
+				//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				return
+			}
+		}()
+	} else {
+		reader = pipeReader
+		getLength = length
+	}
+
+	srcInfo.Reader, err = hash.NewReader(reader, length, "", "", actualPartSize)
 	if err != nil {
 		pipeWriter.CloseWithError(err)
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
-	if objectAPI.IsEncryptionSupported() {
+
+	if objectAPI.IsEncryptionSupported() && !isCompressed(srcInfo.UserDefined) {
 		var li ListPartsInfo
 		li, err = objectAPI.ListObjectParts(ctx, dstBucket, dstObject, uploadID, 0, 1)
 		if err != nil {
@@ -1100,7 +1366,7 @@ func (api objectAPIHandlers) CopyObjectPartHandler(w http.ResponseWriter, r *htt
 
 			info := ObjectInfo{Size: length}
 			size := info.EncryptedSize()
-			srcInfo.Reader, err = hash.NewReader(reader, size, "", "")
+			srcInfo.Reader, err = hash.NewReader(reader, size, "", "", actualPartSize)
 			if err != nil {
 				pipeWriter.CloseWithError(err)
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
@@ -1247,9 +1513,42 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 		}
 	}
 
-	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
+	storageInfo := objectAPI.StorageInfo(context.Background())
+
+	var rd *io.PipeReader
+	var wt *io.PipeWriter
+	actualSize := size
+
+	// Disabling compression for encrypted enabled requests.
+	// Using compression and encryption together enables room for side channel attacks.
+	isCompressed := false
+	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
+		rd, wt = io.Pipe()
+		snappyWriter := snappy.NewWriter(wt)
+		lreader, err := hash.NewReader(reader, size, md5hex, sha256hex, actualSize)
+		if err != nil {
+			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			return
+		}
+		go func() {
+			defer wt.Close()
+			defer snappyWriter.Close()
+			// Writing to the compressed writer.
+			_, err = io.CopyN(snappyWriter, lreader, actualSize)
+			if err != nil {
+				// The ErrorResponse is already written in putObjectPart Handle.
+				return
+			}
+		}()
+		size = -1
+		md5hex = ""
+		sha256hex = ""
+		reader = rd
+		isCompressed = true
+	}
+
+	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex, actualSize)
 	if err != nil {
-		// Verify if the underlying error is signature mismatch.
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
@@ -1303,7 +1602,7 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 			}
 
 			info := ObjectInfo{Size: size}
-			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "") // do not try to verify encrypted content
+			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "", size) // do not try to verify encrypted content
 			if err != nil {
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 				return
@@ -1320,6 +1619,11 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 		// Verify if the underlying error is signature mismatch.
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
+	}
+	if isCompressed {
+		wt.Close()
+		// Suppress compressed ETag.
+		partInfo.ETag = "-" + partInfo.ETag
 	}
 	if partInfo.ETag != "" {
 		w.Header().Set("ETag", "\""+partInfo.ETag+"\"")
@@ -1456,9 +1760,17 @@ func (api objectAPIHandlers) CompleteMultipartUploadHandler(w http.ResponseWrite
 		return
 	}
 
+	storageInfo := objectAPI.StorageInfo(context.Background())
+
 	// Complete parts.
 	var completeParts []CompletePart
 	for _, part := range complMultipartUpload.Parts {
+		// Avoiding for gateway parts.
+		// Because the gateway object parts (particularly azure) have `-` in their E-Tag.
+		// `strings.TrimPrefix` does not work here as intended. So `Replace` is used instead.
+		if storageInfo.Backend.Type != Unknown {
+			part.ETag = strings.Replace(part.ETag, "-", "", -1) // For compressed multiparts, We append '-' for part.ETag.
+		}
 		part.ETag = canonicalizeETag(part.ETag)
 		completeParts = append(completeParts, part)
 	}

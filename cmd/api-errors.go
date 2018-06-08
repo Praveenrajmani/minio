@@ -193,6 +193,7 @@ const (
 	ErrHealAlreadyRunning
 	ErrHealOverlappingPaths
 	ErrIncorrectContinuationToken
+	ErrInvalidDecompressedSize
 )
 
 // error code to APIError structure, these fields carry respective
@@ -840,6 +841,11 @@ var errorCodeResponse = map[APIErrorCode]APIError{
 	ErrIncorrectContinuationToken: {
 		Code:           "InvalidArgument",
 		Description:    "The continuation token provided is incorrect",
+		HTTPStatusCode: http.StatusBadRequest,
+	},
+	ErrInvalidDecompressedSize: {
+		Code:           "XMinioInvalidDecompressedSize",
+		Description:    "The data provided is unfit for decompression",
 		HTTPStatusCode: http.StatusBadRequest,
 	},
 	// Add your error structure here.
