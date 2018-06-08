@@ -284,8 +284,8 @@ func (cfs *cacheFSObjects) Put(ctx context.Context, bucket, object string, data 
 }
 
 // Returns the handle for the cached object
-func (cfs *cacheFSObjects) Get(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string) (err error) {
-	return cfs.GetObject(ctx, bucket, object, startOffset, length, writer, etag)
+func (cfs *cacheFSObjects) Get(ctx context.Context, bucket, object string, startOffset int64, length int64, writer io.Writer, etag string, objInfo ObjectInfo) (err error) {
+	return cfs.GetObject(ctx, bucket, object, startOffset, length, writer, etag, objInfo)
 }
 
 // Deletes the cached object

@@ -284,7 +284,16 @@ func (xl xlObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, ds
 		}
 	}()
 
-	partInfo, err := xl.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.Reader)
+	// Reading the decompressedPartSize from fs.json.
+	var decompressedPartSize int64
+	for _, part := range srcInfo.Parts {
+		if part.Number == partID {
+			decompressedPartSize = part.DecompressedPartSize
+			break
+		}
+	}
+
+	partInfo, err := xl.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.Reader, decompressedPartSize)
 	if err != nil {
 		return pi, toObjectErr(err, dstBucket, dstObject)
 	}
@@ -298,7 +307,7 @@ func (xl xlObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, ds
 // of the multipart transaction.
 //
 // Implements S3 compatible Upload Part API.
-func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (pi PartInfo, e error) {
+func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (pi PartInfo, e error) {
 	if err := checkPutObjectPartArgs(ctx, bucket, object, xl); err != nil {
 		return pi, err
 	}
@@ -440,7 +449,7 @@ func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID 
 	md5hex := hex.EncodeToString(data.MD5Current())
 
 	// Add the current part.
-	xlMeta.AddObjectPart(partID, partSuffix, md5hex, file.Size)
+	xlMeta.AddObjectPart(partID, partSuffix, md5hex, file.Size, decompressedSize)
 
 	for i, disk := range onlineDisks {
 		if disk == OfflineDisk {
@@ -653,7 +662,7 @@ func (xl xlObjects) CompleteMultipartUpload(ctx context.Context, bucket string, 
 			logger.LogIf(ctx, InvalidPart{})
 			return oi, InvalidPart{}
 		}
-
+		 
 		// All parts should have same ETag as previously generated.
 		if currentXLMeta.Parts[partIdx].ETag != part.ETag {
 			logger.LogIf(ctx, InvalidPart{})
@@ -690,6 +699,7 @@ func (xl xlObjects) CompleteMultipartUpload(ctx context.Context, bucket string, 
 			ETag:   part.ETag,
 			Size:   currentXLMeta.Parts[partIdx].Size,
 			Name:   fmt.Sprintf("part.%d", part.PartNumber),
+			DecompressedPartSize:  currentXLMeta.Parts[partIdx].DecompressedPartSize,
 		}
 	}
 

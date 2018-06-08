@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"strconv"
 
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/dns"
@@ -295,6 +296,31 @@ func getRandomHostPort(records []dns.SrvRecord) (string, int) {
 	srvRecord := records[rand.Intn(len(records))]
 	return srvRecord.Host, srvRecord.Port
 }
+
+// Returns true if the object is compressed.
+func isCompressed(metadata map[string]string) bool {
+	_, ok := metadata[ReservedMetadataPrefix+"compression"]
+	return ok
+}
+
+func getDecompressedSize(objInfo ObjectInfo) int64 {
+	if len(objInfo.Parts) == 0 {
+		metadata := objInfo.UserDefined
+		if sizeStr, ok := metadata[ReservedMetadataPrefix+"decompressedSize"]; ok {
+			size, err := strconv.ParseInt(sizeStr,10,64)
+			if err == nil {
+				return size
+			}
+		}
+		return 0
+	} else {
+		var totalPartSize int64 
+		for _, part := range objInfo.Parts {
+			totalPartSize += part.DecompressedPartSize
+		}
+		return totalPartSize
+	}
+} 
 
 // byBucketName is a collection satisfying sort.Interface.
 type byBucketName []BucketInfo
