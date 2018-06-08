@@ -340,7 +340,7 @@ func fsCreateFile(ctx context.Context, filePath string, reader io.Reader, buf []
 			return 0, err
 		}
 	}
-
+	
 	var bytesWritten int64
 	if buf != nil {
 		bytesWritten, err = io.CopyBuffer(writer, reader, buf)
