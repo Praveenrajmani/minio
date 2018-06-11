@@ -29,7 +29,10 @@ import (
 	"sync/atomic"
 	"time"
 	"fmt"
+	//"reflect"
+	//"bytes"
 
+	snappy "github.com/golang/snappy"
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/hash"
 	"github.com/minio/minio/pkg/lock"
@@ -589,10 +592,29 @@ func (fs *FSObjects) getObject(ctx context.Context, bucket, object string, offse
 		return err
 	}
 
-	// Allocate a staging buffer.
-	buf := make([]byte, int(bufSize))
+	fmt.Println("bufSize: ",bufSize)
+	fmt.Println("length: ",length)
 
-	_, err = io.CopyBuffer(writer, io.LimitReader(reader, length), buf)
+	
+	sreader := snappy.NewReader(io.LimitReader(reader, length))
+
+	/*p, err := ioutil.ReadAll(sreader)
+	if err != nil {
+		//.Fatalf("read error: %v", err)
+		fmt.Println("wrror")
+	}
+    fmt.Println("********************************")
+	fmt.Println("Type of p",reflect.TypeOf(p))
+	fmt.Println("p: ",p)
+	fmt.Println("Length of p: ",len(p))
+
+	creader := bytes.NewReader(p)*/
+
+	// Allocate a staging buffer.
+	bufSize = 1222
+	buf := make([]byte, int(bufSize))
+	
+	_, err = io.CopyBuffer(writer, sreader, buf)
 	logger.LogIf(ctx, err)
 	return toObjectErr(err, bucket, object)
 }
