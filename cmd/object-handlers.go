@@ -1220,7 +1220,22 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 			sha256hex = getContentSha256Cksum(r)
 		}
 	}
-
+	
+	buf := new(bytes.Buffer)
+	snappyWriter:=snappy.NewWriter(buf)
+	defer snappyWriter.Close()
+	
+	if _, err := io.Copy(snappyWriter, reader); err != nil {
+		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+		return
+	}
+	
+	size = int64(len(buf.Bytes()))
+	h := sha.New()
+	h.Write(buf.Bytes())
+	sha256hex=hex.EncodeToString(h.Sum(nil))
+	reader = bytes.NewReader(buf.Bytes())
+	
 	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
 	if err != nil {
 		// Verify if the underlying error is signature mismatch.
