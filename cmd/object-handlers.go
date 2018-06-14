@@ -190,7 +190,21 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		objectWriter = wt
 		reader := snappy.NewReader(rd)
 		defer wt.Close()
+		if hrange != nil {
+			snappyLength := length
+			snappyStartOffset := startOffset 
+			length = objInfo.Size
+			startOffset = 0
+		}
 		go func() {
+			if hrange != nil {
+				if _, err := io.CopyN(goioutil.Discard, reader, snappyStartOffset); err != nil {
+					writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+					httpWriter.Close()
+					return	
+				}
+				reader = io.LimitReader(reader, snappyLength)
+			}
 			n, err := io.Copy(httpWriter, reader)
 			if err != nil {
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
