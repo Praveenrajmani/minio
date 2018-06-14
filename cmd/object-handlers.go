@@ -54,6 +54,10 @@ var supportedHeadGetReqParams = map[string]string{
 	"response-content-disposition": "Content-Disposition",
 }
 
+const (
+	compressionAlgorithm = "golang/snappy/LZ77"
+)
+
 // setHeadGetRespHeaders - set any requested parameters as response headers.
 func setHeadGetRespHeaders(w http.ResponseWriter, reqParams url.Values) {
 	for k, v := range reqParams {
@@ -178,38 +182,39 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		getObject = api.CacheAPI().GetObject
 	}
 
-	// Reads the object at startOffset and writes to mw.
-	rd, wt := io.Pipe()
-	reader := snappy.NewReader(rd)
-
-	go func() {
-		n, err := io.Copy(httpWriter, reader)
-		if err != nil {
-			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-			httpWriter.Close()
-			return
-		}
-		objInfo.Size = n
+	var objectWriter io.Writer
+	objectWriter = httpWriter
+	
+	if isCompressed(objInfo.UserDefined) {
+		rd, wt := io.Pipe()
+		objectWriter = wt
+		reader := snappy.NewReader(rd)
+		defer wt.Close()
+		go func() {
+			n, err := io.Copy(httpWriter, reader)
+			if err != nil {
+				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				httpWriter.Close()
+				return
+			}
+			objInfo.Size = n
+			setObjectHeaders(w, objInfo, hrange)
+			setHeadGetRespHeaders(w, r.URL.Query())
+		}()	
+	} else {
+		// The objectInfo.Size is not modified.
 		setObjectHeaders(w, objInfo, hrange)
 		setHeadGetRespHeaders(w, r.URL.Query())
-	}()
-
+	}
 	
-	if err = getObject(ctx, bucket, object, startOffset, length, wt, objInfo.ETag); err != nil {
+	// Reads the object at startOffset and writes to objectWriter.
+	if err = getObject(ctx, bucket, object, startOffset, length, objectWriter, objInfo.ETag); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		}
 		httpWriter.Close()
 		return
 	}
-
-
-	if err != nil {
-		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-		httpWriter.Close()
-		return
-	}
-	wt.Close()
 
 	if err = httpWriter.Close(); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
@@ -755,6 +760,9 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Storing the compression metadata.
+	metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+
 	// Deny if WORM is enabled
 	if globalWORMEnabled {
 		if _, err = objectAPI.GetObjectInfo(ctx, bucket, object); err == nil {
@@ -888,6 +896,9 @@ func (api objectAPIHandlers) NewMultipartUploadHandler(w http.ResponseWriter, r 
 	for k, v := range encMetadata {
 		metadata[k] = v
 	}
+
+	// Storing the compression metadata.
+	metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
 
 	newMultipartUpload := objectAPI.NewMultipartUpload
 	if api.CacheAPI() != nil {

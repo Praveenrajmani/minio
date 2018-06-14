@@ -277,6 +277,12 @@ func isMinioReservedBucket(bucketName string) bool {
 	return bucketName == minioReservedBucket
 }
 
+// Returns true if the object is compressed in PUT.
+func isCompressed(metadata map[string]string) bool {
+	_, ok := metadata[ReservedMetadataPrefix+"compression"]
+	return ok
+}
+
 // byBucketName is a collection satisfying sort.Interface.
 type byBucketName []BucketInfo
 
