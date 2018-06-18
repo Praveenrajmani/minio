@@ -204,7 +204,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			} else {
 				fmt.Println("setting size")
 				objInfo.Size = 841
-				reader = io.LimitReader(reader, 841)
+				//reader = io.LimitReader(reader, 841)
 				setObjectHeaders(w, objInfo, hrange)
 				setHeadGetRespHeaders(w, r.URL.Query())
 			}
