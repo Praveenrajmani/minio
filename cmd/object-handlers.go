@@ -126,6 +126,8 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	//set the decompressed size
+
 	// Get request range.
 	var hrange *httpRange
 	rangeHeader := r.Header.Get("Range")
@@ -150,6 +152,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 
 	// Get the object.
 	var startOffset int64
+	// change it to the actual size
 	length := objInfo.Size
 	if hrange != nil {
 		startOffset = hrange.offsetBegin
@@ -184,6 +187,8 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 
 	var objectWriter io.Writer
 	objectWriter = httpWriter
+	var snappyStartOffset int64
+	var snappyLength int64
 	
 	if isCompressed(objInfo.UserDefined) {
 		rd, wt := io.Pipe()

@@ -592,6 +592,9 @@ func (fs *FSObjects) getObject(ctx context.Context, bucket, object string, offse
 	buf := make([]byte, int(bufSize))
 
 	_, err = io.CopyBuffer(writer, io.LimitReader(reader, length), buf)
+	if err == ErrClosedPipe {
+		err=nil
+	}
 	logger.LogIf(ctx, err)
 	return toObjectErr(err, bucket, object)
 }
