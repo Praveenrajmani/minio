@@ -28,6 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"fmt"
 	
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/hash"
@@ -591,8 +592,12 @@ func (fs *FSObjects) getObject(ctx context.Context, bucket, object string, offse
 	// Allocate a staging buffer.
 	buf := make([]byte, int(bufSize))
 
+	fmt.Println("length bef limit", length)
+	fmt.Println(offset)
 	_, err = io.CopyBuffer(writer, io.LimitReader(reader, length), buf)
-	if err == ErrClosedPipe {
+	fmt.Println("error in buf", err)
+	if err!=nil {
+		fmt.Println("err in copy buffer", err)
 		err=nil
 	}
 	logger.LogIf(ctx, err)

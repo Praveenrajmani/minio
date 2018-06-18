@@ -161,10 +161,75 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 
 	var writer io.Writer
 	writer = w
+	httpWriter := ioutil.WriteOnClose(writer)
+
+	if isCompressed(objInfo.UserDefined) {
+		var httpwriter io.Writer
+		httpwriter = w
+		rd, wt := io.Pipe()
+		writer = wt
+		defer wt.Close()
+		//httpWriter = ioutil.WriteOnClose(httpwriter)
+		
+		snappyStartOffset := startOffset
+		snappyLength := length
+		length = objInfo.Size
+		//startOffset = 0
+
+		fmt.Println("length inside compress: ",snappyLength)
+		
+		//rd, wt := io.Pipe()
+		//objectWriter = wt
+		var reader io.Reader
+		reader = snappy.NewReader(rd)
+		//defer wt.Close()
+		//if hrange != nil {
+		//	snappyLength := length
+		//      snappyStartOffset := startOffset 
+		//	length = objInfo.Size
+		//	startOffset = 0
+		//}
+		go func() {
+			if hrange != nil {
+				fmt.Println("should not come here")
+				if _, err := io.CopyN(goioutil.Discard, reader, snappyStartOffset); err != nil {
+					writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+					httpWriter.Close()
+					return	
+				}
+				reader = io.LimitReader(reader, snappyLength)
+				objInfo.Size = snappyLength
+				setObjectHeaders(w, objInfo, hrange)
+				setHeadGetRespHeaders(w, r.URL.Query())	
+			} else {
+				fmt.Println("setting size")
+				objInfo.Size = 841
+				reader = io.LimitReader(reader, 841)
+				setObjectHeaders(w, objInfo, hrange)
+				setHeadGetRespHeaders(w, r.URL.Query())
+			}
+			
+			_, err := io.Copy(httpwriter, reader)
+			fmt.Println("error in cp ", err)
+			if err != nil {
+				fmt.Println("error here", err)
+				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				//httpwriter.Close()
+				return
+			}
+		}()	
+	} else {
+		// The objectInfo.Size is not modified.
+		setObjectHeaders(w, objInfo, hrange)
+		setHeadGetRespHeaders(w, r.URL.Query())
+	}
+
+	
 	if objectAPI.IsEncryptionSupported() {
 		if hasSSECustomerHeader(r.Header) {
 			// Response writer should be limited early on for decryption upto required length,
 			// additionally also skipping mod(offset)64KiB boundaries.
+			
 			writer = ioutil.LimitedWriter(writer, startOffset%(64*1024), length)
 
 			writer, startOffset, length, err = DecryptBlocksRequest(writer, r, startOffset, length, objInfo, false)
@@ -178,56 +243,25 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	httpWriter := ioutil.WriteOnClose(writer)
-
+	if !isCompressed(objInfo.UserDefined) {
+		httpWriter = ioutil.WriteOnClose(writer)
+		writer = httpWriter
+	}
+	
 	getObject := objectAPI.GetObject
 	if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
 		getObject = api.CacheAPI().GetObject
 	}
 
-	var objectWriter io.Writer
-	objectWriter = httpWriter
-	var snappyStartOffset int64
-	var snappyLength int64
+	//var objectWriter io.Writer
+	//objectWriter = httpWriter
+	//var snappyStartOffset int64
+	//var snappyLength int64
 	
-	if isCompressed(objInfo.UserDefined) {
-		rd, wt := io.Pipe()
-		objectWriter = wt
-		reader := snappy.NewReader(rd)
-		defer wt.Close()
-		if hrange != nil {
-			snappyLength := length
-			snappyStartOffset := startOffset 
-			length = objInfo.Size
-			startOffset = 0
-		}
-		go func() {
-			if hrange != nil {
-				if _, err := io.CopyN(goioutil.Discard, reader, snappyStartOffset); err != nil {
-					writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-					httpWriter.Close()
-					return	
-				}
-				reader = io.LimitReader(reader, snappyLength)
-			}
-			n, err := io.Copy(httpWriter, reader)
-			if err != nil {
-				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-				httpWriter.Close()
-				return
-			}
-			objInfo.Size = n
-			setObjectHeaders(w, objInfo, hrange)
-			setHeadGetRespHeaders(w, r.URL.Query())
-		}()	
-	} else {
-		// The objectInfo.Size is not modified.
-		setObjectHeaders(w, objInfo, hrange)
-		setHeadGetRespHeaders(w, r.URL.Query())
-	}
 	
 	// Reads the object at startOffset and writes to objectWriter.
-	if err = getObject(ctx, bucket, object, startOffset, length, objectWriter, objInfo.ETag); err != nil {
+	fmt.Println("getObject: lenght: ", length)
+	if err = getObject(ctx, bucket, object, startOffset, length, writer, objInfo.ETag); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		}
@@ -236,6 +270,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	if err = httpWriter.Close(); err != nil {
+		fmt.Println("err in httpWriter.Close")
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
