@@ -594,8 +594,10 @@ func (fs *FSObjects) getObject(ctx context.Context, bucket, object string, offse
 
 	fmt.Println("length bef limit", length)
 	fmt.Println(offset)
-	_, err = io.CopyBuffer(writer, io.LimitReader(reader, length), buf)
+	var n int64
+	n, err = io.CopyBuffer(writer, io.LimitReader(reader, length), buf)
 	fmt.Println("error in buf", err)
+	fmt.Println("bytes copied: ", n)
 	if err!=nil {
 		fmt.Println("err in copy buffer", err)
 		err=nil

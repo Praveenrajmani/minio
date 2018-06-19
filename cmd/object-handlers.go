@@ -225,6 +225,10 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		setHeadGetRespHeaders(w, r.URL.Query())
 	}
 
+	//var temp bytes.Buffer
+	//writer = temp
+	//buf := new(bytes.Buffer)
+	
 	
 	if objectAPI.IsEncryptionSupported() {
 		if hasSSECustomerHeader(r.Header) {
@@ -262,13 +266,17 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	
 	// Reads the object at startOffset and writes to objectWriter.
 	fmt.Println("getObject: lenght: ", length)
-	if err = getObject(ctx, bucket, object, startOffset, length, writer, objInfo.ETag); err != nil {
+	writerClose := ioutil.WriteOnClose(writer)
+	if err = getObject(ctx, bucket, object, startOffset, length, writerClose, objInfo.ETag); err != nil {
+		fmt.Println("error in getOb", err)
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		}
 		httpWriter.Close()
 		return
 	}
+
+	writerClose.Close()
 
 	if err = httpWriter.Close(); err != nil {
 		fmt.Println("err in httpWriter.Close")
