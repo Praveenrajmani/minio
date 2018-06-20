@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strconv"
 	"bytes"
+	"sync"
 
 	"github.com/gorilla/mux"
 	"github.com/minio/minio/cmd/logger"
@@ -75,6 +76,8 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	ctx := newContext(r, "GetObject")
 
 	var object, bucket string
+	var wg sync.WaitGroup
+	
 	vars := mux.Vars(r)
 	bucket = vars["bucket"]
 	object = vars["object"]
@@ -126,8 +129,6 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	//set the decompressed size
-
 	// Get request range.
 	var hrange *httpRange
 	rangeHeader := r.Header.Get("Range")
@@ -161,61 +162,70 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 
 	var writer io.Writer
 	writer = w
-	httpWriter := ioutil.WriteOnClose(writer)
 
 	if isCompressed(objInfo.UserDefined) {
-		var httpwriter io.Writer
-		httpwriter = w
+		var responseWriter io.Writer
+		var reader io.Reader
+		responseWriter = w
+		
 		rd, wt := io.Pipe()
 		writer = wt
+		reader = snappy.NewReader(rd)
 		defer wt.Close()
-		//httpWriter = ioutil.WriteOnClose(httpwriter)
-		
+	
 		snappyStartOffset := startOffset
 		snappyLength := length
 		length = objInfo.Size
-		//startOffset = 0
+		startOffset = 0
 
-		fmt.Println("length inside compress: ",snappyLength)
+		decompressedSize := getDecompressedSize(objInfo.UserDefined)
+		fmt.Println("decompressed size ", decompressedSize)
+
+		if decompressedSize <= 0 {
+			writeErrorResponse(w, ErrInvalidDecompressedSize, r.URL)
+			return
+		}
+
+		if hrange != nil {
+			// For negative length we read everything.
+			if snappyLength < 0 {
+				fmt.Println("should not")
+				snappyLength = decompressedSize - snappyStartOffset
+			}
+
+			// Reply back invalid range if the input offset and length fall out of range.
+			if snappyStartOffset > decompressedSize || snappyStartOffset+snappyLength > decompressedSize {
+				fmt.Println("should not")
+				writeErrorResponse(w, ErrInvalidRange, r.URL)
+				return
+			}
+		}
+
+		wg.Add(1)
 		
-		//rd, wt := io.Pipe()
-		//objectWriter = wt
-		var reader io.Reader
-		reader = snappy.NewReader(rd)
-		//defer wt.Close()
-		//if hrange != nil {
-		//	snappyLength := length
-		//      snappyStartOffset := startOffset 
-		//	length = objInfo.Size
-		//	startOffset = 0
-		//}
 		go func() {
+			defer wg.Done()
 			if hrange != nil {
-				fmt.Println("should not come here")
 				if _, err := io.CopyN(goioutil.Discard, reader, snappyStartOffset); err != nil {
+					fmt.Println("error in copyN")
 					writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-					httpWriter.Close()
 					return	
 				}
 				reader = io.LimitReader(reader, snappyLength)
 				objInfo.Size = snappyLength
+				fmt.Println("setting here")
 				setObjectHeaders(w, objInfo, hrange)
 				setHeadGetRespHeaders(w, r.URL.Query())	
 			} else {
-				fmt.Println("setting size")
-				objInfo.Size = 841
-				reader = io.LimitReader(reader, 841)
+				objInfo.Size = decompressedSize
+				reader = io.LimitReader(reader, decompressedSize)
 				setObjectHeaders(w, objInfo, hrange)
 				setHeadGetRespHeaders(w, r.URL.Query())
 			}
 			
-			n, err := io.Copy(httpwriter, reader)
-			fmt.Println("n in cp: ", n)
-			fmt.Println("error in cp ", err)
+			_, err := io.Copy(responseWriter, reader)
 			if err != nil {
-				fmt.Println("error here", err)
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-				//httpwriter.Close()
 				return
 			}
 		}()	
@@ -225,11 +235,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		setHeadGetRespHeaders(w, r.URL.Query())
 	}
 
-	//var temp bytes.Buffer
-	//writer = temp
-	//buf := new(bytes.Buffer)
-	
-	
+
 	if objectAPI.IsEncryptionSupported() {
 		if hasSSECustomerHeader(r.Header) {
 			// Response writer should be limited early on for decryption upto required length,
@@ -247,28 +253,15 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			w.Header().Set(SSECustomerKeyMD5, r.Header.Get(SSECustomerKeyMD5))
 		}
 	}
-
-	if !isCompressed(objInfo.UserDefined) {
-		httpWriter = ioutil.WriteOnClose(writer)
-		writer = httpWriter
-	}
 	
 	getObject := objectAPI.GetObject
 	if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
 		getObject = api.CacheAPI().GetObject
 	}
-
-	//var objectWriter io.Writer
-	//objectWriter = httpWriter
-	//var snappyStartOffset int64
-	//var snappyLength int64
 	
-	
+	httpWriter := ioutil.WriteOnClose(writer)
 	// Reads the object at startOffset and writes to objectWriter.
-	fmt.Println("getObject: lenght: ", length)
-	writerClose := ioutil.WriteOnClose(writer)
-	if err = getObject(ctx, bucket, object, startOffset, length, writerClose, objInfo.ETag); err != nil {
-		fmt.Println("error in getOb", err)
+	if err = getObject(ctx, bucket, object, startOffset, length, httpWriter, objInfo.ETag); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		}
@@ -276,14 +269,15 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	writerClose.Close()
-
 	if err = httpWriter.Close(); err != nil {
-		fmt.Println("err in httpWriter.Close")
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
 		}
+	}
+
+	if isCompressed(objInfo.UserDefined) {
+		wg.Wait()
 	}
 
 	// Get host and port from Request.RemoteAddr.
@@ -806,10 +800,13 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 	snappyWriter:=snappy.NewWriter(buf)
 	defer snappyWriter.Close()
 	
-	if _, err := io.Copy(snappyWriter, reader); err != nil {
+	n, err := io.Copy(snappyWriter, reader)
+	if err != nil {
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
+
+	fmt.Println("n in getH ",n)
 	
 	size = int64(len(buf.Bytes()))
 	h := sha.New()
@@ -825,6 +822,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 
 	// Storing the compression metadata.
 	metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+	metadata[ReservedMetadataPrefix+"decompressedSize"] = strconv.FormatInt(n, 10)
 
 	// Deny if WORM is enabled
 	if globalWORMEnabled {

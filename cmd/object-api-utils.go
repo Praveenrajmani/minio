@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"strings"
 	"unicode/utf8"
+	"strconv"
 
 	"github.com/minio/minio/cmd/logger"
 	"github.com/skyrings/skyring-common/tools/uuid"
@@ -282,6 +283,16 @@ func isCompressed(metadata map[string]string) bool {
 	_, ok := metadata[ReservedMetadataPrefix+"compression"]
 	return ok
 }
+
+func getDecompressedSize(metadata map[string]string) int64 {
+	if sizeStr, ok := metadata[ReservedMetadataPrefix+"decompressedSize"]; ok {
+		size, err := strconv.ParseInt(sizeStr,10,64)
+		if err == nil {
+			return size
+		}
+	}
+	return 0
+} 
 
 // byBucketName is a collection satisfying sort.Interface.
 type byBucketName []BucketInfo
