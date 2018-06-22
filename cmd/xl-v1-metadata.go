@@ -329,12 +329,13 @@ func objectPartIndex(parts []objectPartInfo, partNumber int) int {
 }
 
 // AddObjectPart - add a new object part in order.
-func (m *xlMetaV1) AddObjectPart(partNumber int, partName string, partETag string, partSize int64) {
+func (m *xlMetaV1) AddObjectPart(partNumber int, partName string, partETag string, partSize int64, decompressedSize int64) {
 	partInfo := objectPartInfo{
 		Number: partNumber,
 		Name:   partName,
 		ETag:   partETag,
 		Size:   partSize,
+		DecompressedPartSize: decompressedSize, 
 	}
 
 	// Update part info if it already exists.

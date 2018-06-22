@@ -431,7 +431,7 @@ func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID 
 	md5hex := hex.EncodeToString(data.MD5Current())
 
 	// Add the current part.
-	xlMeta.AddObjectPart(partID, partSuffix, md5hex, file.Size)
+	xlMeta.AddObjectPart(partID, partSuffix, md5hex, file.Size, decompressedSize)
 
 	for i, disk := range onlineDisks {
 		if disk == OfflineDisk {
@@ -644,7 +644,7 @@ func (xl xlObjects) CompleteMultipartUpload(ctx context.Context, bucket string, 
 			logger.LogIf(ctx, InvalidPart{})
 			return oi, InvalidPart{}
 		}
-
+		 
 		// All parts should have same ETag as previously generated.
 		if currentXLMeta.Parts[partIdx].ETag != part.ETag {
 			logger.LogIf(ctx, InvalidPart{})
@@ -681,6 +681,7 @@ func (xl xlObjects) CompleteMultipartUpload(ctx context.Context, bucket string, 
 			ETag:   part.ETag,
 			Size:   currentXLMeta.Parts[partIdx].Size,
 			Name:   fmt.Sprintf("part.%d", part.PartNumber),
+			DecompressedPartSize:  currentXLMeta.Parts[partIdx].DecompressedPartSize,
 		}
 	}
 

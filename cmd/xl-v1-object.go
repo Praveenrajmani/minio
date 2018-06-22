@@ -661,7 +661,7 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 		sizeWritten += file.Size
 
 		for i := range partsMetadata {
-			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size)
+			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size, 0)
 			partsMetadata[i].Erasure.AddChecksumInfo(ChecksumInfo{partName, file.Algorithm, file.Checksums[i]})
 		}
 
