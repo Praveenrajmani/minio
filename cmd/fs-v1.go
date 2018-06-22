@@ -75,6 +75,7 @@ type FSObjects struct {
 type fsAppendFile struct {
 	sync.Mutex
 	parts    []PartInfo // List of parts appended.
+	compressParts []CompressPartInfo
 	filePath string     // Absolute path of the file in the temp location.
 }
 
@@ -592,6 +593,9 @@ func (fs *FSObjects) getObject(ctx context.Context, bucket, object string, offse
 	buf := make([]byte, int(bufSize))
 
 	_, err = io.CopyBuffer(writer, io.LimitReader(reader, length), buf)
+	if err == io.ErrClosedPipe {
+		err = nil
+	}
 	logger.LogIf(ctx, err)
 	return toObjectErr(err, bucket, object)
 }

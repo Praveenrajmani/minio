@@ -100,7 +100,7 @@ type CacheObjectLayer interface {
 
 	// Multipart operations.
 	NewMultipartUpload(ctx context.Context, bucket, object string, metadata map[string]string) (uploadID string, err error)
-	PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (info PartInfo, err error)
+	PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (info PartInfo, err error)
 	AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error
 	CompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, uploadedParts []CompletePart) (objInfo ObjectInfo, err error)
 
@@ -663,7 +663,7 @@ func (c cacheObjects) NewMultipartUpload(ctx context.Context, bucket, object str
 }
 
 // PutObjectPart - uploads part to backend and cache simultaneously.
-func (c cacheObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (info PartInfo, err error) {
+func (c cacheObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (info PartInfo, err error) {
 	putObjectPartFn := c.PutObjectPartFn
 	dcache, err := c.cache.getCacheFS(ctx, bucket, object)
 	if err != nil {
@@ -713,7 +713,7 @@ func (c cacheObjects) PutObjectPart(ctx context.Context, bucket, object, uploadI
 		pinfoCh <- info
 	}()
 	go func() {
-		if _, perr := dcache.PutObjectPart(ctx, bucket, object, uploadID, partID, cHashReader); perr != nil {
+		if _, perr := dcache.PutObjectPart(ctx, bucket, object, uploadID, partID, cHashReader, 0); perr != nil {
 			wPipe.CloseWithError(perr)
 			return
 		}
@@ -917,7 +917,7 @@ func newServerCacheObjects(config CacheConfig) (CacheObjectLayer, error) {
 			return newObjectLayerFn().NewMultipartUpload(ctx, bucket, object, metadata)
 		},
 		PutObjectPartFn: func(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (info PartInfo, err error) {
-			return newObjectLayerFn().PutObjectPart(ctx, bucket, object, uploadID, partID, data)
+			return newObjectLayerFn().PutObjectPart(ctx, bucket, object, uploadID, partID, data, 0)
 		},
 		AbortMultipartUploadFn: func(ctx context.Context, bucket, object, uploadID string) error {
 			return newObjectLayerFn().AbortMultipartUpload(ctx, bucket, object, uploadID)

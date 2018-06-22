@@ -167,7 +167,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		var responseWriter io.Writer
 		var reader io.Reader
 		responseWriter = w
-		
+
 		rd, wt := io.Pipe()
 		writer = wt
 		reader = snappy.NewReader(rd)
@@ -178,8 +178,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		length = objInfo.Size
 		startOffset = 0
 
-		decompressedSize := getDecompressedSize(objInfo.UserDefined)
-		fmt.Println("decompressed size ", decompressedSize)
+		decompressedSize := getDecompressedSize(objInfo)
 
 		if decompressedSize <= 0 {
 			writeErrorResponse(w, ErrInvalidDecompressedSize, r.URL)
@@ -189,31 +188,51 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		if hrange != nil {
 			// For negative length we read everything.
 			if snappyLength < 0 {
-				fmt.Println("should not")
 				snappyLength = decompressedSize - snappyStartOffset
 			}
 
 			// Reply back invalid range if the input offset and length fall out of range.
 			if snappyStartOffset > decompressedSize || snappyStartOffset+snappyLength > decompressedSize {
-				fmt.Println("should not")
 				writeErrorResponse(w, ErrInvalidRange, r.URL)
 				return
 			}
 		}
 
-		wg.Add(1)
-		
+		var partCloser *io.PipeWriter
+		if len(objInfo.Parts) > 0 {
+			wg.Add(1)
+			partReader, partWriter := io.Pipe()
+			partCloser = partWriter
+			go func() {
+				defer wg.Done()
+				defer partWriter.Close()
+				treader := reader
+				for _, part := range objInfo.Parts {
+					if _, err := io.CopyN(partWriter, treader, part.DecompressedPartSize); err != nil {
+						// Ignoring closed pipe incase of range queries.
+						if err == io.ErrClosedPipe {
+							return
+						}
+						writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+						return	
+					}
+				}
+			}()
+			writer = partWriter
+			reader = partReader
+		}
+
+
 		go func() {
+			wg.Add(1)
 			defer wg.Done()
 			if hrange != nil {
 				if _, err := io.CopyN(goioutil.Discard, reader, snappyStartOffset); err != nil {
-					fmt.Println("error in copyN")
 					writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 					return	
 				}
 				reader = io.LimitReader(reader, snappyLength)
 				objInfo.Size = snappyLength
-				fmt.Println("setting here")
 				setObjectHeaders(w, objInfo, hrange)
 				setHeadGetRespHeaders(w, r.URL.Query())	
 			} else {
@@ -222,11 +241,12 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 				setObjectHeaders(w, objInfo, hrange)
 				setHeadGetRespHeaders(w, r.URL.Query())
 			}
-			
-			_, err := io.Copy(responseWriter, reader)
-			if err != nil {
+			if _, err := io.Copy(responseWriter, reader); err != nil {
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 				return
+			}
+			if len(objInfo.Parts) > 0 {
+				partCloser.Close()
 			}
 		}()	
 	} else {
@@ -261,6 +281,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	
 	httpWriter := ioutil.WriteOnClose(writer)
 	// Reads the object at startOffset and writes to objectWriter.
+
 	if err = getObject(ctx, bucket, object, startOffset, length, httpWriter, objInfo.ETag); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
@@ -277,6 +298,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	if isCompressed(objInfo.UserDefined) {
+		// Wait till the copy go-routines retire.
 		wg.Wait()
 	}
 
@@ -1292,12 +1314,13 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 			sha256hex = getContentSha256Cksum(r)
 		}
 	}
-	
+
 	buf := new(bytes.Buffer)
 	snappyWriter:=snappy.NewWriter(buf)
 	defer snappyWriter.Close()
 	
-	if _, err := io.Copy(snappyWriter, reader); err != nil {
+	n, err := io.Copy(snappyWriter, reader)
+	if err != nil {
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
@@ -1310,7 +1333,6 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 	
 	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
 	if err != nil {
-		// Verify if the underlying error is signature mismatch.
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
@@ -1376,7 +1398,7 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 	if api.CacheAPI() != nil {
 		putObjectPart = api.CacheAPI().PutObjectPart
 	}
-	partInfo, err := putObjectPart(ctx, bucket, object, uploadID, partID, hashReader)
+	partInfo, err := putObjectPart(ctx, bucket, object, uploadID, partID, hashReader, n)
 	if err != nil {
 		// Verify if the underlying error is signature mismatch.
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)

@@ -113,6 +113,7 @@ type objectPartInfo struct {
 	Name   string `json:"name"`
 	ETag   string `json:"etag"`
 	Size   int64  `json:"size"`
+	DecompressedPartSize int64 `json:"decompressedPartSize"`
 }
 
 // byObjectPartNumber is a collection satisfying sort.Interface.

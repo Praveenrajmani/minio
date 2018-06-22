@@ -48,7 +48,7 @@ func (a GatewayUnsupported) CopyObjectPart(ctx context.Context, srcBucket, srcOb
 }
 
 // PutObjectPart puts a part of object in bucket
-func (a GatewayUnsupported) PutObjectPart(ctx context.Context, bucket string, object string, uploadID string, partID int, data *hash.Reader) (pi PartInfo, err error) {
+func (a GatewayUnsupported) PutObjectPart(ctx context.Context, bucket string, object string, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (pi PartInfo, err error) {
 	logger.LogIf(ctx, NotImplemented{})
 	return pi, NotImplemented{}
 }
