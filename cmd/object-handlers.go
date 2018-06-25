@@ -536,6 +536,7 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+<<<<<<< HEAD
 	// Copy source object to destination, if source and destination
 	// object is same then only metadata is updated.
 	objInfo, err := objectAPI.CopyObject(ctx, srcBucket, srcObject, dstBucket, dstObject, srcInfo)
@@ -543,6 +544,75 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 		pipeWriter.CloseWithError(err)
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
+=======
+	var objInfo ObjectInfo
+
+	// Checks if a remote putobject call is needed for CopyObject operation
+	// 1. If source and destination bucket names are same, it means no call needed to etcd to get destination info
+	// 2. If destination bucket doesn't exist locally, only then a etcd call is needed
+	var isRemoteCallRequired = func(ctx context.Context, src, dst string, objAPI ObjectLayer) bool {
+		if src == dst {
+			return false
+		}
+		_, berr := objAPI.GetBucketInfo(ctx, dst)
+		return berr == toObjectErr(errVolumeNotFound, dst)
+	}
+
+	// Returns a minio-go Client configured to access remote host described by destDNSRecord
+	// Applicable only in a federated deployment
+	var getRemoteInstanceClient = func(host string, port int) (*miniogo.Core, error) {
+		// In a federated deployment, all the instances share config files and hence expected to have same
+		// credentials. So, access current instances creds and use it to create client for remote instance
+		endpoint := net.JoinHostPort(host, strconv.Itoa(port))
+		accessKey := globalServerConfig.Credential.AccessKey
+		secretKey := globalServerConfig.Credential.SecretKey
+		return miniogo.NewCore(endpoint, accessKey, secretKey, globalIsSSL)
+	}
+
+	if isRemoteCallRequired(ctx, srcBucket, dstBucket, objectAPI) {
+		if globalDNSConfig == nil {
+			writeErrorResponse(w, ErrNoSuchBucket, r.URL)
+			return
+		}
+		var dstRecords []dns.SrvRecord
+		if dstRecords, err = globalDNSConfig.Get(dstBucket); err == nil {
+			go func() {
+				if gerr := objectAPI.GetObject(ctx, srcBucket, srcObject, 0, srcInfo.Size, srcInfo.Writer, srcInfo.ETag, srcInfo); gerr != nil {
+					pipeWriter.CloseWithError(gerr)
+					writeErrorResponse(w, ErrInternalError, r.URL)
+					return
+				}
+				// Close writer explicitly to indicate data has been written
+				srcInfo.Writer.Close()
+			}()
+
+			// Send PutObject request to appropriate instance (in federated deployment)
+			host, port := getRandomHostPort(dstRecords)
+			client, rerr := getRemoteInstanceClient(host, port)
+			if rerr != nil {
+				pipeWriter.CloseWithError(rerr)
+				writeErrorResponse(w, ErrInternalError, r.URL)
+				return
+			}
+			remoteObjInfo, rerr := client.PutObject(dstBucket, dstObject, srcInfo.Reader, srcInfo.Size, "", "", srcInfo.UserDefined)
+			if rerr != nil {
+				pipeWriter.CloseWithError(rerr)
+				writeErrorResponse(w, ErrInternalError, r.URL)
+				return
+			}
+			objInfo.ETag = remoteObjInfo.ETag
+			objInfo.ModTime = remoteObjInfo.LastModified
+		}
+	} else {
+		// Copy source object to destination, if source and destination
+		// object is same then only metadata is updated.
+		objInfo, err = objectAPI.CopyObject(ctx, srcBucket, srcObject, dstBucket, dstObject, srcInfo)
+		if err != nil {
+			pipeWriter.CloseWithError(err)
+			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			return
+		}
+>>>>>>> f157507e... modified PutObjectPartHandler
 	}
 
 	pipeReader.Close()
