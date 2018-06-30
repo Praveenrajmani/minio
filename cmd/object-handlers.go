@@ -19,7 +19,6 @@ package cmd
 import (
 	"context"
 	"crypto/hmac"
-	sha "crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/xml"
@@ -31,7 +30,6 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
-	"bytes"
 	"sync"
 
 	"github.com/gorilla/mux"
@@ -901,34 +899,40 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Compression is global here, Will compress all the incoming objects for now.
-	buf := new(bytes.Buffer)
-	snappyWriter:=snappy.NewWriter(buf)
-	defer snappyWriter.Close()
-
-	// Writing to the compressed writer.
-	n, err := io.Copy(snappyWriter, reader)
-	if err != nil {
-		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-		return
-	}
-
-	// Calculating the new sha256hex for the hashReader.
-	size = int64(len(buf.Bytes()))
-	h := sha.New()
-	h.Write(buf.Bytes())
-	sha256hex=hex.EncodeToString(h.Sum(nil))
-	reader = bytes.NewReader(buf.Bytes())
-	
 	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
 	if err != nil {
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
+	
+	// Disabling compression for encrypted enabled requests.
+	// Since compression before encryption weakens the ciphertext.
+	// May lead to CRIME/BREACH.
+	if !hasSSECustomerHeader(r.Header) {
+		// Storing the compression metadata.
+		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+		metadata[ReservedMetadataPrefix+"decompressedSize"] = strconv.FormatInt(size, 10)
+		
+		rd, wt := io.Pipe()
+		snappyWriter:=snappy.NewWriter(wt)
 
-	// Storing the compression metadata.
-	metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
-	metadata[ReservedMetadataPrefix+"decompressedSize"] = strconv.FormatInt(n, 10)
+		lreader := io.LimitReader(hashReader, size)
+		go func() {
+			defer wt.Close()
+			defer snappyWriter.Close()
+			// Writing to the compressed writer.
+			_, err := io.Copy(snappyWriter, lreader)
+			if err != nil {
+				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				return
+			}
+		}()
+		hashReader, err = hash.NewReader(rd, size, "", "") // do not try to verify encrypted content
+		if err != nil {
+			// The ErrorResponse is already written in putObject Handle
+			return
+		}	
+	}
 
 	// Deny if WORM is enabled
 	if globalWORMEnabled {
@@ -1399,29 +1403,38 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 		}
 	}
 
-	// Compression is global here, Will compress all the incoming objects for now.
-	buf := new(bytes.Buffer)
-	snappyWriter:=snappy.NewWriter(buf)
-	defer snappyWriter.Close()
-
-	// Writing to the compressed writer.
-	n, err := io.Copy(snappyWriter, reader)
-	if err != nil {
-		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-		return
-	}
-
-	// Calculating the new sha256hex for the hashReader.
-	size = int64(len(buf.Bytes()))
-	h := sha.New()
-	h.Write(buf.Bytes())
-	sha256hex=hex.EncodeToString(h.Sum(nil))
-	reader = bytes.NewReader(buf.Bytes())
-	
 	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
 	if err != nil {
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
+	}
+	
+	// Disabling compression for encrypted enabled requests.
+	// Since compression before encryption weakens the ciphertext.
+	// May lead to CRIME/BREACH.
+	var decompressedPartSize int64
+	if !hasSSECustomerHeader(r.Header) {
+		decompressedPartSize = size
+		
+		rd, wt := io.Pipe()
+		snappyWriter:=snappy.NewWriter(wt)
+
+		lreader := io.LimitReader(hashReader, size)
+		go func() {
+			defer wt.Close()
+			defer snappyWriter.Close()
+			// Writing to the compressed writer.
+			_, err := io.Copy(snappyWriter, lreader)
+			if err != nil {
+				// The ErrorResponse is already written in putObjectPart Handle.
+				return
+			}
+		}()
+		hashReader, err = hash.NewReader(rd, size, "", "") // do not try to verify encrypted content
+		if err != nil {
+			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			return
+		}
 	}
 
 	// Deny if WORM is enabled
@@ -1485,7 +1498,7 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 	if api.CacheAPI() != nil {
 		putObjectPart = api.CacheAPI().PutObjectPart
 	}
-	partInfo, err := putObjectPart(ctx, bucket, object, uploadID, partID, hashReader, n)
+	partInfo, err := putObjectPart(ctx, bucket, object, uploadID, partID, hashReader, decompressedPartSize)
 	if err != nil {
 		// Verify if the underlying error is signature mismatch.
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)

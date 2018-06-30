@@ -403,11 +403,12 @@ func (xl xlObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID 
 
 	// Should return IncompleteBody{} error when reader has fewer bytes
 	// than specified in request header.
-	if file.Size < data.Size() {
-		logger.LogIf(ctx, IncompleteBody{})
-		return pi, IncompleteBody{}
+	if decompressedSize <= 0 {
+		if file.Size < data.Size() {
+			logger.LogIf(ctx, IncompleteBody{})
+			return pi, IncompleteBody{}
+		}
 	}
-
 	// post-upload check (write) lock
 	postUploadIDLock := xl.nsMutex.NewNSLock(minioMetaMultipartBucket, uploadIDPath)
 	if err = postUploadIDLock.GetLock(globalOperationTimeout); err != nil {

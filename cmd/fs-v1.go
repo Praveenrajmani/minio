@@ -827,7 +827,6 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 
 	fsMeta := newFSMetaV1()
 	fsMeta.Meta = meta
-
 	// This is a special case with size as '0' and object ends
 	// with a slash separator, we treat it like a valid operation
 	// and return success.
@@ -908,11 +907,13 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 
 	// Should return IncompleteBody{} error when reader has fewer
 	// bytes than specified in request header.
-	if bytesWritten < data.Size() {
-		fsRemoveFile(ctx, fsTmpObjPath)
-		return ObjectInfo{}, IncompleteBody{}
+	// Avoid the check if compression is enabled.
+	if !isCompressed(fsMeta.Meta) {
+		if bytesWritten < data.Size() {
+			fsRemoveFile(ctx, fsTmpObjPath)
+			return ObjectInfo{}, IncompleteBody{}
+		}
 	}
-
 	// Delete the temporary object in the case of a
 	// failure. If PutObject succeeds, then there would be
 	// nothing to delete.
