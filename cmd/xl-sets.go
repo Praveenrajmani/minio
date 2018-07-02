@@ -833,7 +833,7 @@ func (s *xlSets) CopyObjectPart(ctx context.Context, srcBucket, srcObject, destB
 	var decompressedPartSize int64
 	for _,part := range srcInfo.Parts {
 		if part.Number == partID {
-			decompressedPartSize = part.DecompressedPartSize
+			decompressedPartSize = part.Size
 			break
 		}
 	}

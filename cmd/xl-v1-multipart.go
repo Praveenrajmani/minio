@@ -284,12 +284,14 @@ func (xl xlObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, ds
 		}
 	}()
 
-	// Reading the decompressedPartSize from fs.json.
 	var decompressedPartSize int64
-	for _, part := range srcInfo.Parts {
-		if part.Number == partID {
-			decompressedPartSize = part.DecompressedPartSize
-			break
+	if isCompressed(srcInfo.UserDefined) {
+		// Reading the decompressedPartSize from fs.json.
+		for _, part := range srcInfo.Parts {
+			if part.Number == partID {
+				decompressedPartSize = part.Size
+				break
+			}
 		}
 	}
 
@@ -700,7 +702,6 @@ func (xl xlObjects) CompleteMultipartUpload(ctx context.Context, bucket string, 
 			ETag:   part.ETag,
 			Size:   currentXLMeta.Parts[partIdx].Size,
 			Name:   fmt.Sprintf("part.%d", part.PartNumber),
-			DecompressedPartSize:  currentXLMeta.Parts[partIdx].DecompressedPartSize,
 		}
 	}
 

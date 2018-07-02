@@ -219,7 +219,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 					// Decompress upto N repeatedly until partWriter is closed or EOF is hit.
 					// N represents the decompressed part size.
 					// treader is piped to the writer to which the getObject writes.
-					if _, err := io.CopyN(partWriter, treader, part.DecompressedPartSize); err != nil {
+					if _, err := io.CopyN(partWriter, treader, part.Size); err != nil {
 						// Ignoring closed pipe error incase of range queries.
 						if err == io.ErrClosedPipe {
 							// Omit multiple write header calls.

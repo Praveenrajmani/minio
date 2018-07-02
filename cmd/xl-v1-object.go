@@ -198,7 +198,7 @@ func (xl xlObjects) GetObject(ctx context.Context, bucket, object string, startO
 			}
 		} else if len(objInfo.Parts) > 0 && len(modObjInfo.Parts) > 0 {
 			for i,part := range objInfo.Parts {
-				if part.DecompressedPartSize != modObjInfo.Parts[i].DecompressedPartSize {
+				if part.Size != modObjInfo.Parts[i].Size {
 					return true
 				}
 			}

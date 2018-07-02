@@ -80,7 +80,7 @@ func (fs *FSObjects) backgroundAppend(ctx context.Context, bucket, object, uploa
 	defer file.Unlock()
 
 	// Preserving the decompressed part size in the append file.
-	if partId > 0 {
+	if partId > 0 && decompressedPartSize > 0 {
 		file.compressParts = append(file.compressParts, CompressPartInfo{PartNumber: partId,DecompressedPartSize: decompressedPartSize})
 	}
 
@@ -276,12 +276,14 @@ func (fs *FSObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, d
 		}
 	}()
 
-	// Reading the decompressedPartSize from fs.json.
 	var decompressedPartSize int64
-	for _, part := range srcInfo.Parts {
-		if part.Number == partID {
-			decompressedPartSize = part.DecompressedPartSize
-			break
+	if isCompressed(srcInfo.UserDefined) {
+		// Reading the decompressedPartSize from fs.json.
+		for _, part := range srcInfo.Parts {
+			if part.Number == partID {
+				decompressedPartSize = part.Size
+				break
+			}
 		}
 	}
 
@@ -602,18 +604,19 @@ func (fs *FSObjects) CompleteMultipartUpload(ctx context.Context, bucket string,
 	if file != nil {
 		file.Lock()
 		defer file.Unlock()
-		// Assign the decompressedInfo to the metadata.
-		if len(file.compressParts) == len(parts) {
-			for i := range parts {
-				for j := range file.compressParts {
-					if fsMeta.Parts[i].Number == file.compressParts[j].PartNumber {
-						fsMeta.Parts[i].DecompressedPartSize = file.compressParts[j].DecompressedPartSize
-						break
+		if len(file.compressParts) > 0 {
+			// Assign the decompressedInfo to the metadata.
+			if len(file.compressParts) == len(parts) {
+				for i := range parts {
+					for j := range file.compressParts {
+						if fsMeta.Parts[i].Number == file.compressParts[j].PartNumber {
+							fsMeta.Parts[i].Size = file.compressParts[j].DecompressedPartSize
+							break
+						}
 					}
 				}
 			}
 		}
-		
 		// Verify that appendFile has all the parts.
 		if len(file.parts) == len(parts) {
 			for i := range parts {

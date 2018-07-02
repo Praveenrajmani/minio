@@ -316,7 +316,7 @@ func getDecompressedSize(objInfo ObjectInfo) int64 {
 	} else {
 		var totalPartSize int64 
 		for _, part := range objInfo.Parts {
-			totalPartSize += part.DecompressedPartSize
+			totalPartSize += part.Size
 		}
 		return totalPartSize
 	}

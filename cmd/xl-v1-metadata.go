@@ -113,7 +113,6 @@ type objectPartInfo struct {
 	Name   string `json:"name"`
 	ETag   string `json:"etag"`
 	Size   int64  `json:"size"`
-	DecompressedPartSize int64 `json:"decompressedPartSize"`
 }
 
 // byObjectPartNumber is a collection satisfying sort.Interface.
@@ -335,7 +334,11 @@ func (m *xlMetaV1) AddObjectPart(partNumber int, partName string, partETag strin
 		Name:   partName,
 		ETag:   partETag,
 		Size:   partSize,
-		DecompressedPartSize: decompressedSize, 
+	}
+
+	// Preserving the compress Info in the meta data.
+	if decompressedSize > 0 {
+		partInfo.Size = decompressedSize
 	}
 
 	// Update part info if it already exists.
