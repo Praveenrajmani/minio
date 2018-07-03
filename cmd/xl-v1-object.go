@@ -616,7 +616,7 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 	}
 
 	// Validate input data size and it can never be less than zero.
-	if data.Size() < 0 {
+	if data.Size() < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return ObjectInfo{}, toObjectErr(errInvalidArgument)
 	}
@@ -657,6 +657,9 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 	switch size := data.Size(); {
 	case size == 0:
 		buffer = make([]byte, 1) // Allocate atleast a byte to reach EOF
+	case size == -1:
+		buffer = xl.bp.Get()
+		defer xl.bp.Put(buffer)
 	case size < blockSizeV1:
 		// No need to allocate fully blockSizeV1 buffer if the incoming data is smaller.
 		buffer = make([]byte, size, 2*size)
@@ -682,7 +685,7 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 		// Hint the filesystem to pre-allocate one continuous large block.
 		// This is only an optimization.
 		var curPartReader io.Reader
-		if curPartSize > 0 {
+		if curPartSize >= 0 {
 			pErr := xl.prepareFile(ctx, minioMetaTmpBucket, tempErasureObj, curPartSize, storage.disks, xlMeta.Erasure.BlockSize, xlMeta.Erasure.DataBlocks, writeQuorum)
 			if pErr != nil {
 				return ObjectInfo{}, toObjectErr(pErr, bucket, object)
@@ -701,11 +704,17 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 			return ObjectInfo{}, toObjectErr(erasureErr, minioMetaTmpBucket, tempErasureObj)
 		}
 
+		if file.Size == 0 {
+			break
+		}
+
 		// Should return IncompleteBody{} error when reader has fewer bytes
 		// than specified in request header.
-		if file.Size < curPartSize {
-			logger.LogIf(ctx, IncompleteBody{})
-			return ObjectInfo{}, IncompleteBody{}
+		if !isCompressed(metadata) {
+			if file.Size < curPartSize {
+				logger.LogIf(ctx, IncompleteBody{})
+				return ObjectInfo{}, IncompleteBody{}
+			}
 		}
 
 		// Update the total written size

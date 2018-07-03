@@ -401,7 +401,7 @@ var (
 // calculatePartSizeFromIdx calculates the part size according to input index.
 // returns error if totalSize is -1, partSize is 0, partIndex is 0.
 func calculatePartSizeFromIdx(ctx context.Context, totalSize int64, partSize int64, partIndex int) (currPartSize int64, err error) {
-	if totalSize < 0 {
+	if totalSize < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return 0, errInvalidArgument
 	}

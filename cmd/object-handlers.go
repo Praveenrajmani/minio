@@ -927,7 +927,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 				return
 			}
 		}()
-		hashReader, err = hash.NewReader(rd, size, "", "") // do not try to verify encrypted content
+		hashReader, err = hash.NewReader(rd, -1, "", "") // do not try to verify encrypted content
 		if err != nil {
 			// The ErrorResponse is already written in putObject Handle
 			return
