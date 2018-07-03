@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"fmt"
 
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/hash"
@@ -61,6 +62,7 @@ func (xl xlObjects) prepareFile(ctx context.Context, bucket, object string, size
 	pErrs := make([]error, len(onlineDisks))
 	// Calculate the real size of the part in one disk.
 	actualSize := xl.sizeOnDisk(size, blockSize, dataBlocks)
+	fmt.Println("actual size", actualSize)
 	// Prepare object creation in a all disks
 	for index, disk := range onlineDisks {
 		if disk != nil {
@@ -616,7 +618,7 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 	}
 
 	// Validate input data size and it can never be less than zero.
-	if data.Size() < 0 {
+	if data.Size() < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return ObjectInfo{}, toObjectErr(errInvalidArgument)
 	}
@@ -656,7 +658,10 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 	var buffer []byte
 	switch size := data.Size(); {
 	case size == 0:
-		buffer = make([]byte, 1) // Allocate atleast a byte to reach EOF
+		buffer = make([]byte, 1)// Allocate atleast a byte to reach EOF
+	case size == -1:
+		buffer = xl.bp.Get()
+		defer xl.bp.Put(buffer)
 	case size < blockSizeV1:
 		// No need to allocate fully blockSizeV1 buffer if the incoming data is smaller.
 		buffer = make([]byte, size, 2*size)
@@ -665,6 +670,7 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 		defer xl.bp.Put(buffer)
 	}
 
+	var decompressedPartSize int64
 	// Read data and split into parts - similar to multipart mechanism
 	for partIdx := 1; ; partIdx++ {
 		// Compute part name
@@ -682,7 +688,7 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 		// Hint the filesystem to pre-allocate one continuous large block.
 		// This is only an optimization.
 		var curPartReader io.Reader
-		if curPartSize > 0 {
+		if curPartSize >= 0 {
 			pErr := xl.prepareFile(ctx, minioMetaTmpBucket, tempErasureObj, curPartSize, storage.disks, xlMeta.Erasure.BlockSize, xlMeta.Erasure.DataBlocks, writeQuorum)
 			if pErr != nil {
 				return ObjectInfo{}, toObjectErr(pErr, bucket, object)
@@ -703,16 +709,32 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 
 		// Should return IncompleteBody{} error when reader has fewer bytes
 		// than specified in request header.
-		if file.Size < curPartSize {
-			logger.LogIf(ctx, IncompleteBody{})
-			return ObjectInfo{}, IncompleteBody{}
+		fmt.Println("file.size ", file.Size)
+		if file.Size == 0 {
+			break
 		}
-
+		
+		if !isCompressed(metadata) {
+			if file.Size < curPartSize {
+				logger.LogIf(ctx, IncompleteBody{})
+				return ObjectInfo{}, IncompleteBody{}
+			}
+		} else {
+			sizeStr, ok := metadata[ReservedMetadataPrefix+"decompressedSize"]
+			if ok {
+				decompressedPartSize, err = strconv.ParseInt(sizeStr,10,64)
+				if err != nil {
+					decompressedPartSize = 0
+				}
+			} else {
+				decompressedPartSize = 0
+			}
+		}
 		// Update the total written size
 		sizeWritten += file.Size
 
 		for i := range partsMetadata {
-			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size, 0)
+			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size, decompressedPartSize)
 			partsMetadata[i].Erasure.AddChecksumInfo(ChecksumInfo{partName, file.Algorithm, file.Checksums[i]})
 		}
 
@@ -755,7 +777,11 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 	// Update `xl.json` content on each disks.
 	for index := range partsMetadata {
 		partsMetadata[index].Meta = metadata
-		partsMetadata[index].Stat.Size = sizeWritten
+		if decompressedPartSize > 0 {
+			partsMetadata[index].Stat.Size = decompressedPartSize
+		} else {
+			partsMetadata[index].Stat.Size = sizeWritten
+		}
 		partsMetadata[index].Stat.ModTime = modTime
 	}
 

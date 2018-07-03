@@ -1430,7 +1430,9 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 				return
 			}
 		}()
-		hashReader, err = hash.NewReader(rd, size, "", "") // do not try to verify encrypted content
+		// As the compressed size is not predicted, `-1` is set as the hash size.
+		// -1 reads till EOF 
+		hashReader, err = hash.NewReader(rd, -1, "", "") // do not try to verify encrypted content
 		if err != nil {
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return

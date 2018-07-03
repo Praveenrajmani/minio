@@ -20,6 +20,7 @@ import (
 	"context"
 	"hash"
 	"io"
+	"fmt"
 
 	"github.com/minio/minio/cmd/logger"
 )
@@ -46,12 +47,17 @@ func (s *ErasureStorage) CreateFile(ctx context.Context, src io.Reader, volume, 
 	var n = len(buffer)
 	for n == len(buffer) {
 		n, err = io.ReadFull(src, buffer)
+		fmt.Println("n ", n)
+		fmt.Println("buf ", len(buffer))
 		if n == 0 && err == io.EOF {
+			fmt.Println("n-0 , io.EOF")
 			if f.Size != 0 { // don't write empty block if we have written to the disks
 				break
 			}
 			blocks = make([][]byte, len(s.disks)) // write empty block
 		} else if err == nil || (n > 0 && err == io.ErrUnexpectedEOF) {
+			fmt.Println("err nil, n>0 unexp")
+			fmt.Println("len buffer[:n] ", len(buffer[:n]))
 			blocks, err = s.ErasureEncode(ctx, buffer[:n])
 			if err != nil {
 				return f, err
@@ -62,6 +68,8 @@ func (s *ErasureStorage) CreateFile(ctx context.Context, src io.Reader, volume, 
 		}
 
 		for i := range errChans { // span workers
+			fmt.Println("spanning errchans")
+			fmt.Println("------------------ blocks[i] ", len(blocks[i]))
 			go erasureAppendFile(ctx, s.disks[i], volume, path, hashers[i], blocks[i], errChans[i])
 		}
 		for i := range errChans { // wait until all workers are finished
@@ -72,8 +80,9 @@ func (s *ErasureStorage) CreateFile(ctx context.Context, src io.Reader, volume, 
 		}
 		s.disks = evalDisks(s.disks, errs)
 		f.Size += int64(n)
+		fmt.Println("f.size ", f.Size)
 	}
-
+	
 	f.Algorithm = algorithm
 	for i, disk := range s.disks {
 		if disk == OfflineDisk {
