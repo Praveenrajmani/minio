@@ -308,7 +308,7 @@ func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID
 	}
 
 	// Validate input data size and it can never be less than zero.
-	if data.Size() < 0 {
+	if data.Size() < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return pi, toObjectErr(errInvalidArgument)
 	}
@@ -340,11 +340,9 @@ func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID
 	// Should return IncompleteBody{} error when reader has fewer
 	// bytes than specified in request header.
 	// Avoid the check if compression is enabled.
-	if decompressedPartSize <= 0 {
-		if bytesWritten < data.Size() {
-			fsRemoveFile(ctx, tmpPartPath)
-			return pi, IncompleteBody{}
-		}
+	if bytesWritten < data.Size() {
+		fsRemoveFile(ctx, tmpPartPath)
+		return pi, IncompleteBody{}
 	}
 	// Delete temporary part in case of failure. If
 	// PutObjectPart succeeds then there would be nothing to

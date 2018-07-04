@@ -858,7 +858,7 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 	}
 
 	// Validate input data size and it can never be less than zero.
-	if data.Size() < 0 {
+	if data.Size() < -1 {
 		logger.LogIf(ctx, errInvalidArgument)
 		return ObjectInfo{}, errInvalidArgument
 	}
@@ -907,12 +907,9 @@ func (fs *FSObjects) putObject(ctx context.Context, bucket string, object string
 
 	// Should return IncompleteBody{} error when reader has fewer
 	// bytes than specified in request header.
-	// Avoid the check if compression is enabled.
-	if !isCompressed(fsMeta.Meta) {
-		if bytesWritten < data.Size() {
-			fsRemoveFile(ctx, fsTmpObjPath)
-			return ObjectInfo{}, IncompleteBody{}
-		}
+	if bytesWritten < data.Size() {
+		fsRemoveFile(ctx, fsTmpObjPath)
+		return ObjectInfo{}, IncompleteBody{}
 	}
 	// Delete the temporary object in the case of a
 	// failure. If PutObject succeeds, then there would be
