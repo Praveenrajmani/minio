@@ -27,8 +27,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"errors"
-	"strconv"
 
 	b2 "github.com/minio/blazer/base"
 	"github.com/minio/cli"
@@ -41,9 +39,6 @@ import (
 
 	minio "github.com/minio/minio/cmd"
 )
-
-var errReadBlock = errors.New("Read has been blocked as changes are detected in the data during the run, please try again")
-const ReservedMetadataPrefix = "X-Minio-Internal-"
 
 // Supported bucket types by B2 backend.
 const (
@@ -397,41 +392,6 @@ func (l *b2Objects) ListObjectsV2(ctx context.Context, bucket, prefix, continuat
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
 func (l *b2Objects) GetObject(ctx context.Context, bucket string, object string, startOffset int64, length int64, writer io.Writer, etag string, objInfo minio.ObjectInfo) error {
-
-	if isCompressed(objInfo.UserDefined) {
-		modObjInfo, err := l.GetObjectInfo(ctx, bucket, object)
-		if err != nil {
-			logger.LogIf(ctx, err)
-			return err
-		}
-
-		compressSizeModified := func(objInfo minio.ObjectInfo, modObjInfo minio.ObjectInfo) bool {
-			if len(objInfo.Parts) == 0 && len(modObjInfo.Parts) == 0 {
-				objDecompressedSize := getDecompressedSize(objInfo)
-				modDecompressedSize := getDecompressedSize(modObjInfo)
-				if objDecompressedSize > 0 || modDecompressedSize > 0 {
-					if objDecompressedSize != modDecompressedSize { return true }
-				}
-			} else if len(objInfo.Parts) > 0 && len(modObjInfo.Parts) > 0 {
-				for i,part := range objInfo.Parts {
-					if part.DecompressedPartSize != modObjInfo.Parts[i].DecompressedPartSize {
-						return true
-					}
-				}
-			} else {
-				// An object might be initially uploaded as parts and then could have uploaded normally.
-				// And vice-versa applies.
-				return true
-			}
-			return false
-		}(objInfo, modObjInfo)
-
-		if compressSizeModified {
-			logger.LogIf(ctx, errReadBlock)
-			return errReadBlock
-		}
-	}
-
 	
 	bkt, err := l.Bucket(ctx, bucket)
 	if err != nil {
@@ -447,33 +407,6 @@ func (l *b2Objects) GetObject(ctx context.Context, bucket string, object string,
 	logger.LogIf(ctx, err)
 	return b2ToObjectError(err, bucket, object)
 }
-
-// Returns true if the object is compressed.
-func isCompressed(metadata map[string]string) bool {
-	_, ok := metadata[ReservedMetadataPrefix+"compression"]
-	return ok
-}
-
-// Extract decompressedSize from meta json.
-func getDecompressedSize(objInfo minio.ObjectInfo) int64 {
-	if len(objInfo.Parts) == 0 {
-		metadata := objInfo.UserDefined
-		if sizeStr, ok := metadata[ReservedMetadataPrefix+"decompressedSize"]; ok {
-			size, err := strconv.ParseInt(sizeStr,10,64)
-			if err == nil {
-				return size
-			}
-		}
-		return 0
-	} else {
-		var totalPartSize int64 
-		for _, part := range objInfo.Parts {
-			totalPartSize += part.DecompressedPartSize
-		}
-		return totalPartSize
-	}
-} 
-
 
 // GetObjectInfo reads object info and replies back ObjectInfo
 func (l *b2Objects) GetObjectInfo(ctx context.Context, bucket string, object string) (objInfo minio.ObjectInfo, err error) {

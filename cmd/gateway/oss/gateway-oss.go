@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"errors"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/dustin/go-humanize"
@@ -46,10 +45,6 @@ const (
 	ossMaxKeys       = 1000
 	ossBackend       = "oss"
 )
-
-var errReadBlock = errors.New("Read has been blocked as changes are detected in the data during the run, please try again")
-const ReservedMetadataPrefix = "X-Minio-Internal-"
-
 
 func init() {
 	const ossGatewayTemplate = `NAME:
@@ -548,32 +543,6 @@ func ossGetObject(ctx context.Context, client *oss.Client, bucket, key string, s
 	return nil
 }
 
-// Returns true if the object is compressed.
-func isCompressed(metadata map[string]string) bool {
-	_, ok := metadata[ReservedMetadataPrefix+"compression"]
-	return ok
-}
-
-// Extract decompressedSize from meta json.
-func getDecompressedSize(objInfo minio.ObjectInfo) int64 {
-	if len(objInfo.Parts) == 0 {
-		metadata := objInfo.UserDefined
-		if sizeStr, ok := metadata[ReservedMetadataPrefix+"decompressedSize"]; ok {
-			size, err := strconv.ParseInt(sizeStr,10,64)
-			if err == nil {
-				return size
-			}
-		}
-		return 0
-	} else {
-		var totalPartSize int64 
-		for _, part := range objInfo.Parts {
-			totalPartSize += part.DecompressedPartSize
-		}
-		return totalPartSize
-	}
-} 
-
 // GetObject reads an object on OSS. Supports additional
 // parameters like offset and length which are synonymous with
 // HTTP Range requests.
@@ -581,40 +550,6 @@ func getDecompressedSize(objInfo minio.ObjectInfo) int64 {
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
 func (l *ossObjects) GetObject(ctx context.Context, bucket, key string, startOffset, length int64, writer io.Writer, etag string, objInfo minio.ObjectInfo) error {
-
-	if isCompressed(objInfo.UserDefined) {
-		modObjInfo, err := l.GetObjectInfo(ctx, bucket, key)
-		if err != nil {
-			logger.LogIf(ctx, err)
-			return err
-		}
-
-		compressSizeModified := func(objInfo minio.ObjectInfo, modObjInfo minio.ObjectInfo) bool {
-			if len(objInfo.Parts) == 0 && len(modObjInfo.Parts) == 0 {
-				objDecompressedSize := getDecompressedSize(objInfo)
-				modDecompressedSize := getDecompressedSize(modObjInfo)
-				if objDecompressedSize > 0 || modDecompressedSize > 0 {
-					if objDecompressedSize != modDecompressedSize { return true }
-				}
-			} else if len(objInfo.Parts) > 0 && len(modObjInfo.Parts) > 0 {
-				for i,part := range objInfo.Parts {
-					if part.DecompressedPartSize != modObjInfo.Parts[i].DecompressedPartSize {
-						return true
-					}
-				}
-			} else {
-				// An object might be initially uploaded as parts and then could have uploaded normally.
-				// And vice-versa applies.
-				return true
-			}
-			return false
-		}(objInfo, modObjInfo)
-
-		if compressSizeModified {
-			logger.LogIf(ctx, errReadBlock)
-			return errReadBlock
-		}
-	}
 	
 	return ossGetObject(ctx, l.Client, bucket, key, startOffset, length, writer, etag)
 }

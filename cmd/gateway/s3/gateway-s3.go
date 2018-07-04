@@ -21,9 +21,7 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
-	"errors"
-	"strconv"
-
+	
 	"github.com/minio/cli"
 	miniogo "github.com/minio/minio-go"
 	"github.com/minio/minio-go/pkg/s3utils"
@@ -38,9 +36,6 @@ import (
 const (
 	s3Backend = "s3"
 )
-
-var errReadBlock = errors.New("Read has been blocked as changes are detected in the data during the run, please try again")
-const ReservedMetadataPrefix = "X-Minio-Internal-"
 
 func init() {
 	const s3GatewayTemplate = `NAME:
@@ -292,41 +287,6 @@ func (l *s3Objects) ListObjectsV2(ctx context.Context, bucket, prefix, continuat
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
 func (l *s3Objects) GetObject(ctx context.Context, bucket string, key string, startOffset int64, length int64, writer io.Writer, etag string, objInfo minio.ObjectInfo) error {
-
-	if isCompressed(objInfo.UserDefined) {
-		modObjInfo, err := l.GetObjectInfo(ctx, bucket, key)
-		if err != nil {
-			logger.LogIf(ctx, err)
-			return err
-		}
-
-		compressSizeModified := func(objInfo minio.ObjectInfo, modObjInfo minio.ObjectInfo) bool {
-			if len(objInfo.Parts) == 0 && len(modObjInfo.Parts) == 0 {
-				objDecompressedSize := getDecompressedSize(objInfo)
-				modDecompressedSize := getDecompressedSize(modObjInfo)
-				if objDecompressedSize > 0 || modDecompressedSize > 0 {
-					if objDecompressedSize != modDecompressedSize { return true }
-				}
-			} else if len(objInfo.Parts) > 0 && len(modObjInfo.Parts) > 0 {
-				for i,part := range objInfo.Parts {
-					if part.DecompressedPartSize != modObjInfo.Parts[i].DecompressedPartSize {
-						return true
-					}
-				}
-			} else {
-				// An object might be initially uploaded as parts and then could have uploaded normally.
-				// And vice-versa applies.
-				return true
-			}
-			return false
-		}(objInfo, modObjInfo)
-
-		if compressSizeModified {
-			logger.LogIf(ctx, errReadBlock)
-			return errReadBlock
-		}
-	}
-
 	if length < 0 && length != -1 {
 		logger.LogIf(ctx, minio.InvalidRange{})
 		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucket, key)
@@ -352,33 +312,6 @@ func (l *s3Objects) GetObject(ctx context.Context, bucket string, key string, st
 	}
 	return nil
 }
-
-
-// Returns true if the object is compressed.
-func isCompressed(metadata map[string]string) bool {
-	_, ok := metadata[ReservedMetadataPrefix+"compression"]
-	return ok
-}
-
-// Extract decompressedSize from meta json.
-func getDecompressedSize(objInfo minio.ObjectInfo) int64 {
-	if len(objInfo.Parts) == 0 {
-		metadata := objInfo.UserDefined
-		if sizeStr, ok := metadata[ReservedMetadataPrefix+"decompressedSize"]; ok {
-			size, err := strconv.ParseInt(sizeStr,10,64)
-			if err == nil {
-				return size
-			}
-		}
-		return 0
-	} else {
-		var totalPartSize int64 
-		for _, part := range objInfo.Parts {
-			totalPartSize += part.DecompressedPartSize
-		}
-		return totalPartSize
-	}
-} 
 
 // GetObjectInfo reads object info and replies back ObjectInfo
 func (l *s3Objects) GetObjectInfo(ctx context.Context, bucket string, object string) (objInfo minio.ObjectInfo, err error) {
