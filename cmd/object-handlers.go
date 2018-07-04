@@ -905,11 +905,13 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
-	
+
+	storageInfo := objectAPI.StorageInfo(context.Background())
+
 	// Disabling compression for encrypted enabled requests.
 	// Since compression before encryption weakens the ciphertext.
 	// May lead to CRIME/BREACH.
-	if !hasSSECustomerHeader(r.Header) {
+	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
 		// Storing the compression metadata.
 		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
 		metadata[ReservedMetadataPrefix+"decompressedSize"] = strconv.FormatInt(size, 10)
@@ -1409,12 +1411,14 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
 	}
+
+	storageInfo := objectAPI.StorageInfo(context.Background())
 	
 	// Disabling compression for encrypted enabled requests.
 	// Since compression before encryption weakens the ciphertext.
 	// May lead to CRIME/BREACH.
 	var decompressedPartSize int64
-	if !hasSSECustomerHeader(r.Header) {
+	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
 		decompressedPartSize = size
 		
 		rd, wt := io.Pipe()
