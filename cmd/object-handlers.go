@@ -1071,8 +1071,11 @@ func (api objectAPIHandlers) NewMultipartUploadHandler(w http.ResponseWriter, r 
 		metadata[k] = v
 	}
 
-	// Storing the compression metadata.
-	metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+	storageInfo := objectAPI.StorageInfo(context.Background())
+	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
+		// Storing the compression metadata.
+		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+	}
 
 	newMultipartUpload := objectAPI.NewMultipartUpload
 	if api.CacheAPI() != nil {
