@@ -268,7 +268,7 @@ type CompressPartInfo struct {
 	PartNumber int
 
 	// Decompressed Part Size.
-	DecompressedPartSize int64
+	ActualSize int64
 	
 }
 

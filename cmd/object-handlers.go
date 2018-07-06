@@ -184,9 +184,9 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		startOffset = 0
 
 		// Read the decompressed size from the meta.json.
-		decompressedSize := getDecompressedSize(objInfo)
+		actualSize := getDecompressedSize(objInfo)
 
-		if decompressedSize <= 0 {
+		if actualSize <= 0 {
 			writeErrorResponse(w, ErrInvalidDecompressedSize, r.URL)
 			return
 		}
@@ -195,17 +195,17 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		if hrange != nil {
 			// For negative length we read everything.
 			if snappyLength < 0 {
-				snappyLength = decompressedSize - snappyStartOffset
+				snappyLength = actualSize - snappyStartOffset
 			}
 
 			// Reply back invalid range if the input offset and length fall out of range.
-			if snappyStartOffset > decompressedSize || snappyStartOffset+snappyLength > decompressedSize {
+			if snappyStartOffset > actualSize || snappyStartOffset+snappyLength > actualSize {
 				writeErrorResponse(w, ErrInvalidRange, r.URL)
 				return
 			}
 		}
 
-		_, hasMetaPrefix := objInfo.UserDefined[ReservedMetadataPrefix+"decompressedSize"]
+		_, hasMetaPrefix := objInfo.UserDefined[ReservedMetadataPrefix+"actualSize"]
 		// Handling multipart decompressed reads.
 		var partCloser *io.PipeWriter
 		if len(objInfo.Parts) > 0 && !hasMetaPrefix {
@@ -220,7 +220,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 					// Decompress upto N repeatedly until partWriter is closed or EOF is hit.
 					// N represents the decompressed part size.
 					// treader is piped to the writer to which the getObject writes.
-					if _, err := io.CopyN(partWriter, treader, part.DecompressedPartSize); err != nil {
+					if _, err := io.CopyN(partWriter, treader, part.ActualSize); err != nil {
 						// Ignoring closed pipe error incase of range queries.
 						if err == io.ErrClosedPipe {
 							// Omit multiple write header calls.
@@ -254,8 +254,8 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 				setHeadGetRespHeaders(w, r.URL.Query())	
 			} else {
 				// The limit is set to the decompressed size if the range is disabled.
-				objInfo.Size = decompressedSize
-				reader = io.LimitReader(reader, decompressedSize)
+				objInfo.Size = actualSize
+				reader = io.LimitReader(reader, actualSize)
 				setObjectHeaders(w, objInfo, hrange)
 				setHeadGetRespHeaders(w, r.URL.Query())
 			}
@@ -914,7 +914,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
 		// Storing the compression metadata.
 		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
-		metadata[ReservedMetadataPrefix+"decompressedSize"] = strconv.FormatInt(size, 10)
+		metadata[ReservedMetadataPrefix+"actualSize"] = strconv.FormatInt(size, 10)
 		
 		rd, wt := io.Pipe()
 		snappyWriter:=snappy.NewWriter(wt)
@@ -1203,7 +1203,7 @@ func (api objectAPIHandlers) CopyObjectPartHandler(w http.ResponseWriter, r *htt
 	var actualSize int64
 	for _, part := range srcInfo.Parts {
 		if part.Number == partID {
-			actualSize = part.DecompressedPartSize
+			actualSize = part.ActualSize
 			break
 		}
 	}

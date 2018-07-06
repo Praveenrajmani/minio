@@ -305,7 +305,7 @@ func isCompressed(metadata map[string]string) bool {
 
 func getDecompressedSize(objInfo ObjectInfo) int64 {
 	metadata := objInfo.UserDefined
-	sizeStr, ok := metadata[ReservedMetadataPrefix+"decompressedSize"]
+	sizeStr, ok := metadata[ReservedMetadataPrefix+"actualSize"]
 	if ok {
 		size, err := strconv.ParseInt(sizeStr,10,64)
 		if err == nil {
@@ -314,7 +314,7 @@ func getDecompressedSize(objInfo ObjectInfo) int64 {
 	} else {
 		var totalPartSize int64 
 		for _, part := range objInfo.Parts {
-			totalPartSize += part.DecompressedPartSize
+			totalPartSize += part.ActualSize
 		}
 		return totalPartSize
 	}

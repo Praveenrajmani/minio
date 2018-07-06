@@ -64,7 +64,7 @@ func (fs *FSObjects) decodePartFile(name string) (partNumber int, etag string, e
 }
 
 // Appends parts to an appendFile sequentially.
-func (fs *FSObjects) backgroundAppend(ctx context.Context, bucket, object, uploadID string, partId int, decompressedPartSize int64) {
+func (fs *FSObjects) backgroundAppend(ctx context.Context, bucket, object, uploadID string, partId int, actualSize int64) {
 	fs.appendFileMapMu.Lock()
 	logger.GetReqInfo(ctx).AppendTags("uploadID", uploadID)
 	file := fs.appendFileMap[uploadID]
@@ -81,7 +81,7 @@ func (fs *FSObjects) backgroundAppend(ctx context.Context, bucket, object, uploa
 
 	// Preserving the decompressed part size in the append file.
 	if partId > 0 {
-		file.compressParts = append(file.compressParts, CompressPartInfo{PartNumber: partId,DecompressedPartSize: decompressedPartSize})
+		file.compressParts = append(file.compressParts, CompressPartInfo{PartNumber: partId,ActualSize: actualSize})
 	}
 
 	// Since we append sequentially nextPartNumber will always be len(file.parts)+1
@@ -596,7 +596,7 @@ func (fs *FSObjects) CompleteMultipartUpload(ctx context.Context, bucket string,
 			for i := range parts {
 				for j := range file.compressParts {
 					if fsMeta.Parts[i].Number == file.compressParts[j].PartNumber {
-						fsMeta.Parts[i].DecompressedPartSize = file.compressParts[j].DecompressedPartSize
+						fsMeta.Parts[i].ActualSize = file.compressParts[j].ActualSize
 						break
 					}
 				}

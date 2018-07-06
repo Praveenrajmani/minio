@@ -113,7 +113,7 @@ type objectPartInfo struct {
 	Name   string `json:"name"`
 	ETag   string `json:"etag"`
 	Size   int64  `json:"size"`
-	DecompressedPartSize int64 `json:"decompressedPartSize"`
+	ActualSize int64 `json:"actualSize"`
 }
 
 // byObjectPartNumber is a collection satisfying sort.Interface.
@@ -329,13 +329,13 @@ func objectPartIndex(parts []objectPartInfo, partNumber int) int {
 }
 
 // AddObjectPart - add a new object part in order.
-func (m *xlMetaV1) AddObjectPart(partNumber int, partName string, partETag string, partSize int64, decompressedSize int64) {
+func (m *xlMetaV1) AddObjectPart(partNumber int, partName string, partETag string, partSize int64, actualSize int64) {
 	partInfo := objectPartInfo{
 		Number: partNumber,
 		Name:   partName,
 		ETag:   partETag,
 		Size:   partSize,
-		DecompressedPartSize: decompressedSize, 
+		ActualSize: actualSize, 
 	}
 
 	// Update part info if it already exists.

@@ -692,7 +692,7 @@ func (xl xlObjects) CompleteMultipartUpload(ctx context.Context, bucket string, 
 			ETag:   part.ETag,
 			Size:   currentXLMeta.Parts[partIdx].Size,
 			Name:   fmt.Sprintf("part.%d", part.PartNumber),
-			DecompressedPartSize:  currentXLMeta.Parts[partIdx].DecompressedPartSize,
+			ActualSize:  currentXLMeta.Parts[partIdx].ActualSize,
 		}
 	}
 
