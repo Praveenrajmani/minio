@@ -552,7 +552,7 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 	var writer io.WriteCloser = pipeWriter
 	var reader io.Reader = pipeReader
 
-	srcInfo.Reader, err = hash.NewReader(reader, srcInfo.Size, "", "")
+	srcInfo.Reader, err = hash.NewReader(reader, srcInfo.Size, "", "", srcInfo.Size)
 	if err != nil {
 		pipeWriter.CloseWithError(err)
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
@@ -631,7 +631,7 @@ func (api objectAPIHandlers) CopyObjectHandler(w http.ResponseWriter, r *http.Re
 					size = srcInfo.EncryptedSize()
 				}
 			}
-			srcInfo.Reader, err = hash.NewReader(reader, size, "", "") // do not try to verify encrypted content
+			srcInfo.Reader, err = hash.NewReader(reader, size, "", "", srcInfo.Size) // do not try to verify encrypted content
 			if err != nil {
 				pipeWriter.CloseWithError(err)
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
@@ -900,7 +900,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
+	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex, size)
 	if err != nil {
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
@@ -930,7 +930,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 				return
 			}
 		}()
-		hashReader, err = hash.NewReader(rd, -1, "", "") // do not try to verify encrypted content
+		hashReader, err = hash.NewReader(rd, -1, "", "", size) // do not try to verify encrypted content
 		if err != nil {
 			// The ErrorResponse is already written in putObject Handle
 			return
@@ -953,7 +953,7 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 				return
 			}
 			info := ObjectInfo{Size: size}
-			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "") // do not try to verify encrypted content
+			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "", size) // do not try to verify encrypted content
 			if err != nil {
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 				return
@@ -1199,9 +1199,18 @@ func (api objectAPIHandlers) CopyObjectPartHandler(w http.ResponseWriter, r *htt
 	// Initialize pipe.
 	pipeReader, pipeWriter := io.Pipe()
 
+	// Reading the actualSize from meta json.
+	var actualSize int64
+	for _, part := range srcInfo.Parts {
+		if part.Number == partID {
+			actualSize = part.DecompressedPartSize
+			break
+		}
+	}
+
 	var writer io.WriteCloser = pipeWriter
 	var reader io.Reader = pipeReader
-	srcInfo.Reader, err = hash.NewReader(reader, length, "", "")
+	srcInfo.Reader, err = hash.NewReader(reader, length, "", "", actualSize)
 	if err != nil {
 		pipeWriter.CloseWithError(err)
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
@@ -1262,7 +1271,7 @@ func (api objectAPIHandlers) CopyObjectPartHandler(w http.ResponseWriter, r *htt
 				size = info.EncryptedSize()
 			}
 
-			srcInfo.Reader, err = hash.NewReader(reader, size, "", "")
+			srcInfo.Reader, err = hash.NewReader(reader, size, "", "", actualSize)
 			if err != nil {
 				pipeWriter.CloseWithError(err)
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
@@ -1409,7 +1418,7 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 		}
 	}
 
-	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex)
+	hashReader, err := hash.NewReader(reader, size, md5hex, sha256hex, size)
 	if err != nil {
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		return
@@ -1420,10 +1429,8 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 	// Disabling compression for encrypted enabled requests.
 	// Since compression before encryption weakens the ciphertext.
 	// May lead to CRIME/BREACH.
-	var decompressedPartSize int64
+	
 	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
-		decompressedPartSize = size
-		
 		rd, wt := io.Pipe()
 		snappyWriter:=snappy.NewWriter(wt)
 
@@ -1438,7 +1445,7 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 				return
 			}
 		}()
-		hashReader, err = hash.NewReader(rd, -1, "", "") // do not try to verify encrypted content
+		hashReader, err = hash.NewReader(rd, -1, "", "", size) // do not try to verify encrypted content
 		if err != nil {
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
@@ -1494,7 +1501,7 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 			}
 
 			info := ObjectInfo{Size: size}
-			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "") // do not try to verify encrypted content
+			hashReader, err = hash.NewReader(reader, info.EncryptedSize(), "", "", size) // do not try to verify encrypted content
 			if err != nil {
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 				return
@@ -1506,7 +1513,7 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 	if api.CacheAPI() != nil {
 		putObjectPart = api.CacheAPI().PutObjectPart
 	}
-	partInfo, err := putObjectPart(ctx, bucket, object, uploadID, partID, hashReader, decompressedPartSize)
+	partInfo, err := putObjectPart(ctx, bucket, object, uploadID, partID, hashReader)
 	if err != nil {
 		// Verify if the underlying error is signature mismatch.
 		writeErrorResponse(w, toAPIErrorCode(err), r.URL)

@@ -829,21 +829,12 @@ func (s *xlSets) CopyObjectPart(ctx context.Context, srcBucket, srcObject, destB
 		}
 	}()
 
-	// read the decompressed part size from xl.json.
-	var decompressedPartSize int64
-	for _,part := range srcInfo.Parts {
-		if part.Number == partID {
-			decompressedPartSize = part.DecompressedPartSize
-			break
-		}
-	}
-	
-	return destSet.PutObjectPart(ctx, destBucket, destObject, uploadID, partID, srcInfo.Reader, decompressedPartSize)
+	return destSet.PutObjectPart(ctx, destBucket, destObject, uploadID, partID, srcInfo.Reader)
 }
 
 // PutObjectPart - writes part of an object to hashedSet based on the object name.
-func (s *xlSets) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (info PartInfo, err error) {
-	return s.getHashedSet(object).PutObjectPart(ctx, bucket, object, uploadID, partID, data, decompressedSize)
+func (s *xlSets) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (info PartInfo, err error) {
+	return s.getHashedSet(object).PutObjectPart(ctx, bucket, object, uploadID, partID, data)
 }
 
 // ListObjectParts - lists all uploaded parts to an object in hashedSet.

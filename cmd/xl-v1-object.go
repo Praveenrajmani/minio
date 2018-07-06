@@ -145,7 +145,7 @@ func (xl xlObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dstBuc
 		pipeWriter.Close() // Close writer explicitly signalling we wrote all data.
 	}()
 
-	hashReader, err := hash.NewReader(pipeReader, length, "", "")
+	hashReader, err := hash.NewReader(pipeReader, length, "", "", length)
 	if err != nil {
 		logger.LogIf(ctx, err)
 		return oi, toObjectErr(err, dstBucket, dstObject)
@@ -721,7 +721,7 @@ func (xl xlObjects) putObject(ctx context.Context, bucket string, object string,
 		sizeWritten += file.Size
 
 		for i := range partsMetadata {
-			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size, 0)
+			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size, data.ActualSize())
 			partsMetadata[i].Erasure.AddChecksumInfo(ChecksumInfo{partName, file.Algorithm, file.Checksums[i]})
 		}
 

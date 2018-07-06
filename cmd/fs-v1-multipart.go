@@ -276,16 +276,7 @@ func (fs *FSObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, d
 		}
 	}()
 
-	// Reading the decompressedPartSize from fs.json.
-	var decompressedPartSize int64
-	for _, part := range srcInfo.Parts {
-		if part.Number == partID {
-			decompressedPartSize = part.DecompressedPartSize
-			break
-		}
-	}
-
-	partInfo, err := fs.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.Reader, decompressedPartSize)
+	partInfo, err := fs.PutObjectPart(ctx, dstBucket, dstObject, uploadID, partID, srcInfo.Reader)
 	if err != nil {
 		return pi, toObjectErr(err, dstBucket, dstObject)
 	}
@@ -297,7 +288,7 @@ func (fs *FSObjects) CopyObjectPart(ctx context.Context, srcBucket, srcObject, d
 // an ongoing multipart transaction. Internally incoming data is
 // written to '.minio.sys/tmp' location and safely renamed to
 // '.minio.sys/multipart' for reach parts.
-func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedPartSize int64) (pi PartInfo, e error) {
+func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (pi PartInfo, e error) {
 	
 	if err := checkPutObjectPartArgs(ctx, bucket, object, fs); err != nil {
 		return pi, toObjectErr(err, bucket)
@@ -359,7 +350,7 @@ func (fs *FSObjects) PutObjectPart(ctx context.Context, bucket, object, uploadID
 		return pi, toObjectErr(err, minioMetaMultipartBucket, partPath)
 	}
 
-	go fs.backgroundAppend(ctx, bucket, object, uploadID, partID, decompressedPartSize)
+	go fs.backgroundAppend(ctx, bucket, object, uploadID, partID, data.ActualSize())
 
 	fi, err := fsStatFile(ctx, partPath)
 	if err != nil {

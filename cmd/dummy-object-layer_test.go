@@ -92,7 +92,7 @@ func (api *DummyObjectLayer) CopyObjectPart(ctx context.Context, srcBucket, srcO
 	return
 }
 
-func (api *DummyObjectLayer) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader, decompressedSize int64) (info PartInfo, err error) {
+func (api *DummyObjectLayer) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data *hash.Reader) (info PartInfo, err error) {
 	return
 }
 
