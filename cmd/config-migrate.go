@@ -2354,7 +2354,7 @@ func migrateV26ToV27() error {
 	srvConfig.Logger.HTTP["1"] = loggerHTTP{}
 
 	if err = quick.SaveConfig(srvConfig, configFile, globalEtcdClient); err != nil {
-		return fmt.Errorf("Failed to migrate config from '26' to '27'. %v", err)
+		return fmt.Errorf("Failed to migrate config from â26â to â27â. %v", err)
 	}
 
 	logger.Info(configMigrateMSGTemplate, configFile, "26", "27")
@@ -2362,129 +2362,33 @@ func migrateV26ToV27() error {
 }
 
 func migrateV27ToV28() error {
+
 	configFile := getConfigFile()
 
-	cv27 := &serverConfigV27{}
-	_, err := quick.LoadConfig(configFile, globalEtcdClient, cv27)
+	// config V28 is backward compatible with V27, load the old
+	// config file in serverConfigV28 struct and set the default values
+	// for the compression configuration.
+	srvConfig := &serverConfigV28{}
+	_, err := quick.LoadConfig(configFile, globalEtcdClient, srvConfig)
 	if os.IsNotExist(err) {
 		return nil
 	} else if err != nil {
-		return fmt.Errorf("Unable to load config version '27'. %v", err)
+		return fmt.Errorf("Unable to load config file. %v", err)
 	}
-	if cv27.Version != "27" {
+
+	if srvConfig.Version != "27" {
 		return nil
 	}
 
-	// Copy over fields from V27 into V28 config struct
-	srvConfig := &serverConfigV28{
-		Notify: notifier{},
-	}
 	srvConfig.Version = "28"
-	srvConfig.Credential = cv27.Credential
-	srvConfig.Region = cv27.Region
-	if srvConfig.Region == "" {
-		// Region needs to be set for AWS Signature Version 4.
-		srvConfig.Region = globalMinioDefaultRegion
-	}
-
-	if len(cv27.Notify.AMQP) == 0 {
-		srvConfig.Notify.AMQP = make(map[string]target.AMQPArgs)
-		srvConfig.Notify.AMQP["1"] = target.AMQPArgs{}
-	} else {
-		srvConfig.Notify.AMQP = cv27.Notify.AMQP
-	}
-	if len(cv27.Notify.Elasticsearch) == 0 {
-		srvConfig.Notify.Elasticsearch = make(map[string]target.ElasticsearchArgs)
-		srvConfig.Notify.Elasticsearch["1"] = target.ElasticsearchArgs{
-			Format: event.NamespaceFormat,
-		}
-	} else {
-		srvConfig.Notify.Elasticsearch = cv27.Notify.Elasticsearch
-	}
-	if len(cv27.Notify.Redis) == 0 {
-		srvConfig.Notify.Redis = make(map[string]target.RedisArgs)
-		srvConfig.Notify.Redis["1"] = target.RedisArgs{
-			Format: event.NamespaceFormat,
-		}
-	} else {
-		srvConfig.Notify.Redis = cv27.Notify.Redis
-	}
-	if len(cv27.Notify.PostgreSQL) == 0 {
-		srvConfig.Notify.PostgreSQL = make(map[string]target.PostgreSQLArgs)
-		srvConfig.Notify.PostgreSQL["1"] = target.PostgreSQLArgs{
-			Format: event.NamespaceFormat,
-		}
-	} else {
-		srvConfig.Notify.PostgreSQL = cv27.Notify.PostgreSQL
-	}
-	if len(cv27.Notify.Kafka) == 0 {
-		srvConfig.Notify.Kafka = make(map[string]target.KafkaArgs)
-		srvConfig.Notify.Kafka["1"] = target.KafkaArgs{}
-	} else {
-		srvConfig.Notify.Kafka = cv27.Notify.Kafka
-	}
-	if len(cv27.Notify.NATS) == 0 {
-		srvConfig.Notify.NATS = make(map[string]target.NATSArgs)
-		srvConfig.Notify.NATS["1"] = target.NATSArgs{}
-	} else {
-		srvConfig.Notify.NATS = cv27.Notify.NATS
-	}
-	if len(cv27.Notify.Webhook) == 0 {
-		srvConfig.Notify.Webhook = make(map[string]target.WebhookArgs)
-		srvConfig.Notify.Webhook["1"] = target.WebhookArgs{}
-	} else {
-		srvConfig.Notify.Webhook = cv27.Notify.Webhook
-	}
-	if len(cv27.Notify.MySQL) == 0 {
-		srvConfig.Notify.MySQL = make(map[string]target.MySQLArgs)
-		srvConfig.Notify.MySQL["1"] = target.MySQLArgs{
-			Format: event.NamespaceFormat,
-		}
-	} else {
-		srvConfig.Notify.MySQL = cv27.Notify.MySQL
-	}
-
-	if len(cv27.Notify.MQTT) == 0 {
-		srvConfig.Notify.MQTT = make(map[string]target.MQTTArgs)
-		srvConfig.Notify.MQTT["1"] = target.MQTTArgs{}
-	} else {
-		srvConfig.Notify.MQTT = cv27.Notify.MQTT
-	}
-
-	// Load browser config from existing config in the file.
-	srvConfig.Browser = cv27.Browser
-
-	// Load worm config from existing config in the file.
-	srvConfig.Worm = cv27.Worm
-
-	// Load domain config from existing config in the file.
-	srvConfig.Domain = cv27.Domain
-
-	// Load storage class config from existing storage class config in the file.
-	srvConfig.StorageClass.RRS = cv27.StorageClass.RRS
-	srvConfig.StorageClass.Standard = cv27.StorageClass.Standard
-
-	// Load cache config from existing cache config in the file.
-	srvConfig.Cache.Drives = cv27.Cache.Drives
-	srvConfig.Cache.Exclude = cv27.Cache.Exclude
-	srvConfig.Cache.Expiry = cv27.Cache.Expiry
-
-	// Add predefined value to new server config.
-	srvConfig.Cache.MaxUse = globalCacheMaxUse
-
-	// Load predefined logger config.
-	srvConfig.Logger.Console.Enabled = cv27.Logger.Console.Enabled
-	srvConfig.Logger.HTTP = cv27.Logger.HTTP
-	srvConfig.Logger.HTTP["1"] = cv27.Logger.HTTP["1"]
-
 	// Init compression config.For future migration, Compression config needs to be copied over from previous version.
-	srvConfig.Compression.DoNotCompressExtensions = []string{}
-	srvConfig.Compression.DoNotCompressContentTypes = []string{}
+	srvConfig.Compression.SkipCompressExtensions = []string{}
+	srvConfig.Compression.SkipCompressContentTypes = []string{}
 
 	if err = quick.SaveConfig(srvConfig, configFile, globalEtcdClient); err != nil {
-		return fmt.Errorf("Failed to migrate config from '%s' to '%s'. %v", cv27.Version, srvConfig.Version, err)
+		return fmt.Errorf("Failed to migrate config from â27â to â28â. %v", err)
 	}
 
-	logger.Info(configMigrateMSGTemplate, configFile, cv27.Version, srvConfig.Version)
+	logger.Info(configMigrateMSGTemplate, configFile, "27", "28")
 	return nil
 }

@@ -183,6 +183,6 @@ Example 1:
 	uiErrInvalidCompressionExcludesValue = newUIErrFn(
 		"Invalid compression exclude value",
 		"Please check the passed value",
-		"MINIO_DONOTCOMPRESS: Compress exclusion patterns are delimited by `,`",
+		"MINIO_SKIPCOMPRESS: Compress exclusion patterns are delimited by `,`",
 	)
 )

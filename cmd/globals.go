@@ -218,14 +218,14 @@ var (
 	globalIsEnvCompressionExclude bool
 
 	// Exclude-list for compression.
-	globalDoNotCompressExtensions   []string
-	globalDoNotCompressContentTypes []string
+	globalSkipCompressExtensions   []string
+	globalSkipCompressContentTypes []string
 
 	// Some standard object extensions which we strictly dis-allow for compression.
-	standardDoNotCompressExtensions = []string{"*.gz", "*.bz2", ".rar", ".zip", ".7z"}
+	standardSkipCompressExtensions = []string{"*.gz", "*.bz2", ".rar", ".zip", ".7z"}
 
 	// Some standard content-types which we strictly dis-allow for compression.
-	standardDoNotCompressContentTypes = []string{"video/*", "audio/*", "application/zip", "application/x-gzip", "application/x-zip-compressed", " application/x-compress", "application/x-spoon"}
+	standardSkipCompressContentTypes = []string{"video/*", "audio/*", "application/zip", "application/x-gzip", "application/x-zip-compressed", " application/x-compress", "application/x-spoon"}
 	// Add new variable global values here.
 )
 

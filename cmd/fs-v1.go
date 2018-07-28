@@ -1274,3 +1274,8 @@ func (fs *FSObjects) IsNotificationSupported() bool {
 func (fs *FSObjects) IsEncryptionSupported() bool {
 	return true
 }
+
+// IsCompressionSupported returns whether compression is applicable for this layer.
+func (fs *FSObjects) IsCompressionSupported() bool {
+	return true
+}

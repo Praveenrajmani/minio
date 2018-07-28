@@ -210,8 +210,8 @@ func (s *serverConfig) Validate() error {
 
 // SetCacheConfig sets the current cache config
 func (s *serverConfig) SetCompressionConfig(extensions []string, contentTypes []string) {
-	s.Compression.DoNotCompressExtensions = extensions
-	s.Compression.DoNotCompressExtensions = contentTypes
+	s.Compression.SkipCompressExtensions = extensions
+	s.Compression.SkipCompressExtensions = contentTypes
 }
 
 // GetCompressionConfig gets the current compression config
@@ -303,11 +303,11 @@ func newServerConfig() *serverConfig {
 			Expiry:  globalCacheExpiry,
 			MaxUse:  globalCacheMaxUse,
 		},
-		Compression: CompressionConfig{
-			DoNotCompressExtensions:   []string{},
-			DoNotCompressContentTypes: []string{},
-		},
 		Notify: notifier{},
+		Compression: CompressionConfig{
+			SkipCompressExtensions:   []string{},
+			SkipCompressContentTypes: []string{},
+		},
 	}
 
 	// Make sure to initialize notification configs.
@@ -340,9 +340,6 @@ func newServerConfig() *serverConfig {
 	// Create an example of HTTP logger
 	srvCfg.Logger.HTTP = make(map[string]loggerHTTP)
 	srvCfg.Logger.HTTP["target1"] = loggerHTTP{Endpoint: "https://username:password@example.com/api"}
-
-	srvCfg.Compression.DoNotCompressExtensions = make([]string, 0)
-	srvCfg.Compression.DoNotCompressContentTypes = make([]string, 0)
 
 	return srvCfg
 }
@@ -386,7 +383,7 @@ func newConfig() error {
 	}
 
 	if globalIsEnvCompressionExclude {
-		srvCfg.SetCompressionConfig(globalDoNotCompressExtensions, globalDoNotCompressContentTypes)
+		srvCfg.SetCompressionConfig(globalSkipCompressExtensions, globalSkipCompressContentTypes)
 	}
 	// hold the mutex lock before a new config is assigned.
 	// Save the new config globally.
@@ -470,7 +467,7 @@ func loadConfig() error {
 	}
 
 	if globalIsEnvCompressionExclude {
-		srvCfg.SetCompressionConfig(globalDoNotCompressExtensions, globalDoNotCompressContentTypes)
+		srvCfg.SetCompressionConfig(globalSkipCompressExtensions, globalSkipCompressContentTypes)
 	}
 
 	// hold the mutex lock before a new config is assigned.
@@ -503,8 +500,8 @@ func loadConfig() error {
 	}
 	if !globalIsEnvCompressionExclude {
 		compressionConf := globalServerConfig.GetCompressionConfig()
-		globalDoNotCompressExtensions = compressionConf.DoNotCompressExtensions
-		globalDoNotCompressContentTypes = compressionConf.DoNotCompressContentTypes
+		globalSkipCompressExtensions = compressionConf.SkipCompressExtensions
+		globalSkipCompressContentTypes = compressionConf.SkipCompressContentTypes
 	}
 	globalServerConfigMu.Unlock()
 

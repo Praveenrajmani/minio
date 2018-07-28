@@ -725,12 +725,12 @@ type serverConfigV27 struct {
 
 // CompressionConfig represents compression config settings
 type CompressionConfig struct {
-	DoNotCompressExtensions   []string `json:"doNotCompressExtensions"`
-	DoNotCompressContentTypes []string `json:"doNotCompressContentTypes"`
+	SkipCompressExtensions   []string `json:"skipCompressExtensions"`
+	SkipCompressContentTypes []string `json:"skipCompressContentTypes"`
 }
 
 // serverConfigV28 is just like version '27', stores additionally
-// doNotCompress fields for compression.
+// skipCompress fields for compression.
 //
 // IMPORTANT NOTE: When updating this struct make sure that
 // serverConfig.ConfigDiff() is updated as necessary.
@@ -752,12 +752,12 @@ type serverConfigV28 struct {
 	// Cache configuration
 	Cache CacheConfig `json:"cache"`
 
-	// Compression configuration
-	Compression CompressionConfig `json:"compression"`
-
 	// Notification queue configuration.
 	Notify notifier `json:"notify"`
 
 	// Logger configuration
 	Logger loggerConfig `json:"logger"`
+
+	// Compression configuration
+	Compression CompressionConfig `json:"compression"`
 }

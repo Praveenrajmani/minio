@@ -175,8 +175,8 @@ var (
 		}
 	},
 	"compression": {
-		"doNotCompressExtensions": [],
-		"doNotCompressContentTypes": []
+		"skipCompressExtensions": [],
+		"skipCompressContentTypes": []
 	}
 }`)
 )

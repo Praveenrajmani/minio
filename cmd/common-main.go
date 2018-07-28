@@ -280,23 +280,23 @@ func handleCommonEnvVars() {
 		globalIsEnvWORM = true
 		globalWORMEnabled = bool(wormFlag)
 	}
-	doNotCompressExtensions := os.Getenv("MINIO_DONOTCOMPRESS_EXTENSIONS")
-	doNotCompressContentTypes := os.Getenv("MINIO_DONOTCOMPRESS_CONTENTTYPES")
-	if doNotCompressExtensions != "" || doNotCompressContentTypes != "" {
+	skipCompressExtensions := os.Getenv("MINIO_SKIPCOMPRESS_EXTENSIONS")
+	skipCompressContentTypes := os.Getenv("MINIO_SKIPCOMPRESS_CONTENTTYPES")
+	if skipCompressExtensions != "" || skipCompressContentTypes != "" {
 		globalIsEnvCompressionExclude = true
-		if doNotCompressExtensions != "" {
-			extensions, err := parseCompressExcludes(strings.Split(doNotCompressExtensions, compressEnvDelimiter))
+		if skipCompressExtensions != "" {
+			extensions, err := parseCompressExcludes(strings.Split(skipCompressExtensions, compressEnvDelimiter))
 			if err != nil {
-				logger.Fatal(err, "Unable to parse MINIO_DONOTCOMPRESS_EXTENSIONS value (`%s`)", extensions)
+				logger.Fatal(err, "Unable to parse MINIO_SKIPCOMPRESS_EXTENSIONS value (`%s`)", extensions)
 			}
-			globalDoNotCompressExtensions = extensions
+			globalSkipCompressExtensions = extensions
 		}
-		if doNotCompressContentTypes != "" {
-			contenttypes, err := parseCompressExcludes(strings.Split(doNotCompressContentTypes, compressEnvDelimiter))
+		if skipCompressContentTypes != "" {
+			contenttypes, err := parseCompressExcludes(strings.Split(skipCompressContentTypes, compressEnvDelimiter))
 			if err != nil {
-				logger.Fatal(err, "Unable to parse MINIO_DONOTCOMPRESS_CONTENTTYPES value (`%s`)", contenttypes)
+				logger.Fatal(err, "Unable to parse MINIO_SKIPCOMPRESS_CONTENTTYPES value (`%s`)", contenttypes)
 			}
-			globalDoNotCompressContentTypes = contenttypes
+			globalSkipCompressContentTypes = contenttypes
 		}
 	}
 }

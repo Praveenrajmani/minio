@@ -58,7 +58,7 @@ var supportedHeadGetReqParams = map[string]string{
 }
 
 const (
-	compressionAlgorithm = "golang/snappy/LZ77"
+	compressionAlgorithmV1 = "golang/snappy/LZ77"
 )
 
 // setHeadGetRespHeaders - set any requested parameters as response headers.
@@ -904,8 +904,6 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	storageInfo := objectAPI.StorageInfo(context.Background())
-
 	var hashError error
 	var rd *io.PipeReader
 	var wt *io.PipeWriter
@@ -914,9 +912,9 @@ func (api objectAPIHandlers) PutObjectHandler(w http.ResponseWriter, r *http.Req
 	// Disabling compression for encrypted enabled requests.
 	// Using compression and encryption together enables room for side channel attacks.
 	// Eliminate non-compressible objects by extensions/content-types.
-	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown && !excludeForCompression(bucket, object, r.Header) && size > 0 {
+	if !hasSSECustomerHeader(r.Header) && objectAPI.IsCompressionSupported() && !excludeForCompression(bucket, object, r.Header) && size > 0 {
 		// Storing the compression metadata.
-		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithmV1
 		metadata[ReservedMetadataPrefix+"actualSize"] = strconv.FormatInt(size, 10)
 
 		rd, wt = io.Pipe()
@@ -1096,10 +1094,9 @@ func (api objectAPIHandlers) NewMultipartUploadHandler(w http.ResponseWriter, r 
 		metadata[k] = v
 	}
 
-	storageInfo := objectAPI.StorageInfo(context.Background())
-	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
+	if !hasSSECustomerHeader(r.Header) && objectAPI.IsCompressionSupported() {
 		// Storing the compression metadata.
-		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithm
+		metadata[ReservedMetadataPrefix+"compression"] = compressionAlgorithmV1
 	}
 
 	newMultipartUpload := objectAPI.NewMultipartUpload
@@ -1513,8 +1510,6 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 		}
 	}
 
-	storageInfo := objectAPI.StorageInfo(context.Background())
-
 	var rd *io.PipeReader
 	var wt *io.PipeWriter
 	actualSize := size
@@ -1522,7 +1517,7 @@ func (api objectAPIHandlers) PutObjectPartHandler(w http.ResponseWriter, r *http
 	// Disabling compression for encrypted enabled requests.
 	// Using compression and encryption together enables room for side channel attacks.
 	isCompressed := false
-	if !hasSSECustomerHeader(r.Header) && storageInfo.Backend.Type != Unknown {
+	if !hasSSECustomerHeader(r.Header) && objectAPI.IsCompressionSupported() {
 		rd, wt = io.Pipe()
 		snappyWriter := snappy.NewWriter(wt)
 		lreader, err := hash.NewReader(reader, size, md5hex, sha256hex, actualSize)
@@ -1760,15 +1755,13 @@ func (api objectAPIHandlers) CompleteMultipartUploadHandler(w http.ResponseWrite
 		return
 	}
 
-	storageInfo := objectAPI.StorageInfo(context.Background())
-
 	// Complete parts.
 	var completeParts []CompletePart
 	for _, part := range complMultipartUpload.Parts {
 		// Avoiding for gateway parts.
 		// Because the gateway object parts (particularly azure) have `-` in their E-Tag.
 		// `strings.TrimPrefix` does not work here as intended. So `Replace` is used instead.
-		if storageInfo.Backend.Type != Unknown {
+		if objectAPI.IsCompressionSupported() {
 			part.ETag = strings.Replace(part.ETag, "-", "", -1) // For compressed multiparts, We append '-' for part.ETag.
 		}
 		part.ETag = canonicalizeETag(part.ETag)

@@ -327,8 +327,8 @@ func getDecompressedSize(objInfo ObjectInfo) int64 {
 // Eliminate the non-compressible objects.
 func excludeForCompression(bucket string, object string, header http.Header) bool {
 	// Append global and standard patterns.
-	extensions := append(globalDoNotCompressExtensions, standardDoNotCompressExtensions...)
-	contentTypes := append(globalDoNotCompressContentTypes, standardDoNotCompressContentTypes...)
+	extensions := append(globalSkipCompressExtensions, standardSkipCompressExtensions...)
+	contentTypes := append(globalSkipCompressContentTypes, standardSkipCompressContentTypes...)
 
 	objStr := fmt.Sprintf("%s/%s", bucket, object)
 	contentType := header.Get("Content-Type")
