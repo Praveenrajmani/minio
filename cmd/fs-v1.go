@@ -613,7 +613,7 @@ func (fs *FSObjects) getObject(ctx context.Context, bucket, object string, offse
 	if err == io.ErrClosedPipe {
 		err = nil
 	}
-	logger.LogIf(ctx, err)
+	//logger.LogIf(ctx, err)
 	return toObjectErr(err, bucket, object)
 }
 

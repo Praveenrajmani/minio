@@ -176,25 +176,9 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		length = hrange.getLength()
 	}
 
-	var writer io.Writer
-	var rd *io.PipeReader
-	var wt *io.PipeWriter
-	var responseWriter io.Writer
-
 	if isCompressed(objInfo.UserDefined) {
-		var reader io.Reader
-		responseWriter = w
+		//var writer io.Writer
 
-		// Open a pipe for compression
-		// Where wt is actually passed to the getObject
-		rd, wt = io.Pipe()
-		writer = wt
-		reader = snappy.NewReader(rd)
-		defer wt.Close()
-
-		// Defaulting the length and startOffset.
-		// Incase of range based queries, the entire data is read to the pipeWriter.
-		// So that range is set on the decompressed data.
 		snappyStartOffset := startOffset
 		snappyLength := length
 		length = compressedSize
@@ -214,58 +198,77 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			}
 		}
 
+		objInfo.Size = snappyLength
+		setObjectHeaders(w, objInfo, hrange)
+		setHeadGetRespHeaders(w, r.URL.Query())
+		
+		// Open a pipe for compression
+		// Where wt is actually passed to the getObject
+		rd, wt := io.Pipe()
+		snappyReader := snappy.NewReader(rd)
+		
 		go func() {
 			wg.Add(1)
 			defer wg.Done()
 			if hrange != nil {
-				// Close the pipe writer if the data is read already.
-				// This will happen incase of range queries, If the range is satisfied.
-				// Closing the pipe, releases the writer passed to the getObject.
-				defer wt.Close()
 				// Discarding the data till the startOffset, if the range is enabled.
 				// goioutil.Discard imitates a dummy writer.
-				if _, err = io.CopyN(goioutil.Discard, reader, snappyStartOffset); err != nil {
-					//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				if _, err = io.CopyN(goioutil.Discard, snappyReader, snappyStartOffset); err != nil {	
 					return
 				}
-				objInfo.Size = snappyLength
 			}
-			setObjectHeaders(w, objInfo, hrange)
-			setHeadGetRespHeaders(w, r.URL.Query())
 			// Finally, writes to the client.
 			// The limit is set to the decompressed size if the range is disabled.
-			if _, err = io.CopyN(responseWriter, reader, snappyLength); err != nil {
-				wt.Close()
-				//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			if _, err = io.CopyN(w, snappyReader, snappyLength); err != nil {
 				return
 			}
+			// Close the pipe writer if the data is read already.
+			// This will happen incase of range queries, If the range is satisfied.
+			// Closing the pipe, releases the writer passed to the getObject.
 			wt.Close()
 		}()
-	} else {
-		// The objectInfo.Size is not modified.
-		writer = w
-		setObjectHeaders(w, objInfo, hrange)
-		setHeadGetRespHeaders(w, r.URL.Query())
-	}
-
-	if objectAPI.IsEncryptionSupported() {
-		if hasSSECustomerHeader(r.Header) {
-			// Response writer should be limited early on for decryption upto required length,
-			// additionally also skipping mod(offset)64KiB boundaries.
-
-			writer = ioutil.LimitedWriter(writer, startOffset%(64*1024), length)
-
-			writer, startOffset, length, err = DecryptBlocksRequest(writer, r, bucket, object, startOffset, length, objInfo, false)
-			if err != nil {
-				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-				return
-			}
-
-			w.Header().Set(SSECustomerAlgorithm, r.Header.Get(SSECustomerAlgorithm))
-			w.Header().Set(SSECustomerKeyMD5, r.Header.Get(SSECustomerKeyMD5))
+		getObject := objectAPI.GetObject
+		if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
+			getObject = api.CacheAPI().GetObject
 		}
-	}
+		
+		err := getObject(ctx, bucket, object, startOffset, length, wt, objInfo.ETag)
+		wt.Close()
+		// Wait till the copy go-routines retire.
+		wg.Wait()
+		if err != nil {
+			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			return
+		}
+		
+		// Get host and port from Request.RemoteAddr.
+		host, port, err := net.SplitHostPort(handlers.GetSourceIP(r))
+		if err != nil {
+			host, port = "", ""
+		}
+		
+		// Notify object accessed via a GET request.
+		sendEvent(eventArgs{
+			EventName:  event.ObjectAccessedGet,
+			BucketName: bucket,
+			Object:     objInfo,
+			ReqParams:  extractReqParams(r),
+			UserAgent:  r.UserAgent(),
+			Host:       host,
+			Port:       port,
+		})
+		// Defaulting the length and startOffset.
+		// Incase of range based queries, the entire data is read to the pipeWriter.
+		// So that range is set on the decompressed data.
+		return
 
+		
+	} 
+	// The objectInfo.Size is not modified.
+	writer := w
+	setObjectHeaders(w, objInfo, hrange)
+	setHeadGetRespHeaders(w, r.URL.Query())
+	
 	getObject := objectAPI.GetObject
 	if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
 		getObject = api.CacheAPI().GetObject
@@ -273,34 +276,18 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 
 	httpWriter := ioutil.WriteOnClose(writer)
 	// Reads the object at startOffset and writes to objectWriter.
-
 	if err = getObject(ctx, bucket, object, startOffset, length, httpWriter, objInfo.ETag); err != nil {
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		}
-		if isCompressed(objInfo.UserDefined) {
-			wt.Close()
-			// Wait till the copy go-routines retire.
-			wg.Wait()
-		}
 		httpWriter.Close()
 		return
 	}
-
 	if err = httpWriter.Close(); err != nil {
-		wt.Close()
-		// Wait till the copy go-routines retire.
-		wg.Wait()
 		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
 		}
-	}
-
-	if isCompressed(objInfo.UserDefined) {
-		wt.Close()
-		// Wait till the copy go-routines retire.
-		wg.Wait()
 	}
 
 	// Get host and port from Request.RemoteAddr.
@@ -308,7 +295,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		host, port = "", ""
 	}
-
+	
 	// Notify object accessed via a GET request.
 	sendEvent(eventArgs{
 		EventName:  event.ObjectAccessedGet,
@@ -319,7 +306,9 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		Host:       host,
 		Port:       port,
 	})
+	
 }
+
 
 // HeadObjectHandler - HEAD Object
 // -----------
