@@ -176,6 +176,11 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		length = hrange.getLength()
 	}
 
+	getObject := objectAPI.GetObject
+	if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
+		getObject = api.CacheAPI().GetObject
+	}
+
 	if isCompressed(objInfo.UserDefined) {
 		//var writer io.Writer
 
@@ -227,11 +232,7 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			// Closing the pipe, releases the writer passed to the getObject.
 			wt.Close()
 		}()
-		getObject := objectAPI.GetObject
-		if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
-			getObject = api.CacheAPI().GetObject
-		}
-		
+	
 		err := getObject(ctx, bucket, object, startOffset, length, wt, objInfo.ETag)
 		wt.Close()
 		// Wait till the copy go-routines retire.
@@ -288,11 +289,6 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 	
-	getObject := objectAPI.GetObject
-	if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
-		getObject = api.CacheAPI().GetObject
-	}
-
 	httpWriter := ioutil.WriteOnClose(writer)
 	// Reads the object at startOffset and writes to objectWriter.
 	if err = getObject(ctx, bucket, object, startOffset, length, httpWriter, objInfo.ETag); err != nil {
