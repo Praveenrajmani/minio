@@ -265,9 +265,28 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		
 	} 
 	// The objectInfo.Size is not modified.
-	writer := w
+	var writer io.Writer
+	writer = w
 	setObjectHeaders(w, objInfo, hrange)
 	setHeadGetRespHeaders(w, r.URL.Query())
+	
+	if objectAPI.IsEncryptionSupported() {
+		if hasSSECustomerHeader(r.Header) {
+			// Response writer should be limited early on for decryption upto required length,
+			// additionally also skipping mod(offset)64KiB boundaries.
+			
+			writer = ioutil.LimitedWriter(writer, startOffset%(64*1024), length)
+			
+			writer, startOffset, length, err = DecryptBlocksRequest(writer, r, bucket, object, startOffset, length, objInfo, false)
+			if err != nil {
+				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				return
+			}
+			
+			w.Header().Set(SSECustomerAlgorithm, r.Header.Get(SSECustomerAlgorithm))
+			w.Header().Set(SSECustomerKeyMD5, r.Header.Get(SSECustomerKeyMD5))
+		}
+	}
 	
 	getObject := objectAPI.GetObject
 	if api.CacheAPI() != nil && !hasSSECustomerHeader(r.Header) {
