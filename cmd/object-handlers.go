@@ -234,14 +234,21 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			// Closing the pipe, releases the writer passed to the getObject.
 			wt.Close()
 		}()
-		err := getObject(ctx, bucket, object, startOffset, length, wt, objInfo.ETag)
-		wt.Close()
-		// Wait till the copy go-routines retire.
-		wg.Wait()
+		compressWriter := ioutil.WriteOnClose(wt)
+		err := getObject(ctx, bucket, object, startOffset, length, compressWriter, objInfo.ETag)
 		if err != nil {
-			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			compressWriter.Close()
+			wg.Wait()
+			if !compressWriter.HasWritten() { // write error response only if no data has been written to client yet
+				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			}
+			//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
 		}
+		compressWriter.Close()
+		// Wait till the copy go-routines retire.
+		wg.Wait()
+		
 	} else {
 		writer = w
 		setObjectHeaders(w, objInfo, hrange)
