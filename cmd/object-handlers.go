@@ -245,7 +245,12 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
 		}
-		compressWriter.Close()
+		if err = compressWriter.Close(); err != nil {
+			if !compressWriter.HasWritten() { // write error response only if no data has been written to client yet
+				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				return
+			}
+		}
 		// Wait till the copy go-routines retire.
 		wg.Wait()
 		
