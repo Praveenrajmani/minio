@@ -181,6 +181,8 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		getObject = api.CacheAPI().GetObject
 	}
 
+	var writer io.Writer
+
 	if isCompressed(objInfo.UserDefined) {
 		//var writer io.Writer
 
@@ -232,7 +234,6 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			// Closing the pipe, releases the writer passed to the getObject.
 			wt.Close()
 		}()
-	
 		err := getObject(ctx, bucket, object, startOffset, length, wt, objInfo.ETag)
 		wt.Close()
 		// Wait till the copy go-routines retire.
@@ -241,36 +242,11 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
 		}
-		
-		// Get host and port from Request.RemoteAddr.
-		host, port, err := net.SplitHostPort(handlers.GetSourceIP(r))
-		if err != nil {
-			host, port = "", ""
-		}
-		
-		// Notify object accessed via a GET request.
-		sendEvent(eventArgs{
-			EventName:  event.ObjectAccessedGet,
-			BucketName: bucket,
-			Object:     objInfo,
-			ReqParams:  extractReqParams(r),
-			UserAgent:  r.UserAgent(),
-			Host:       host,
-			Port:       port,
-		})
-		// Defaulting the length and startOffset.
-		// Incase of range based queries, the entire data is read to the pipeWriter.
-		// So that range is set on the decompressed data.
-		return
-
-		
-	} 
-	// The objectInfo.Size is not modified.
-	var writer io.Writer
-	writer = w
-	setObjectHeaders(w, objInfo, hrange)
-	setHeadGetRespHeaders(w, r.URL.Query())
-	
+	} else {
+		writer = w
+		setObjectHeaders(w, objInfo, hrange)
+		setHeadGetRespHeaders(w, r.URL.Query())
+	}
 	if objectAPI.IsEncryptionSupported() {
 		if hasSSECustomerHeader(r.Header) {
 			// Response writer should be limited early on for decryption upto required length,
@@ -288,20 +264,22 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			w.Header().Set(SSECustomerKeyMD5, r.Header.Get(SSECustomerKeyMD5))
 		}
 	}
-	
-	httpWriter := ioutil.WriteOnClose(writer)
-	// Reads the object at startOffset and writes to objectWriter.
-	if err = getObject(ctx, bucket, object, startOffset, length, httpWriter, objInfo.ETag); err != nil {
-		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
-			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
-		}
-		httpWriter.Close()
-		return
-	}
-	if err = httpWriter.Close(); err != nil {
-		if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
-			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+
+	if !isCompressed(objInfo.UserDefined) {
+		httpWriter := ioutil.WriteOnClose(writer)
+		// Reads the object at startOffset and writes to objectWriter.
+		if err = getObject(ctx, bucket, object, startOffset, length, httpWriter, objInfo.ETag); err != nil {
+			if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
+				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+			}
+			httpWriter.Close()
 			return
+		}
+		if err = httpWriter.Close(); err != nil {
+			if !httpWriter.HasWritten() { // write error response only if no data has been written to client yet
+				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
+				return
+			}
 		}
 	}
 
