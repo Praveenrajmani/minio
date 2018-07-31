@@ -242,7 +242,6 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			if !compressWriter.HasWritten() { // write error response only if no data has been written to client yet
 				writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			}
-			//writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
 		}
 		if err = compressWriter.Close(); err != nil {
