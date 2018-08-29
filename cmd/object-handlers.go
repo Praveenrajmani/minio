@@ -316,8 +316,6 @@ func (api objectAPIHandlers) SelectObjectContentHandler(w http.ResponseWriter, r
 func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "GetObject")
 
-	var wg sync.WaitGroup
-
 	// Fetch object stat info.
 	objectAPI := api.ObjectAPI()
 	if objectAPI == nil {
@@ -458,10 +456,10 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		startOffset, length = rs.GetOffsetLength(objInfo.Size)
 	}
 
-	var writer io.Writer
-
+	// Override `reader` with `compressReader` for compressed objects.
+	// We cannot re-use `reader` since we are using it inclusively.
+	var compressReader io.ReadCloser
 	if objInfo.IsCompressed() {
-		var pipeErr error
 
 		// Validate the range.
 		if rs != nil {
@@ -485,32 +483,15 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 		setHeadGetRespHeaders(w, r.URL.Query())
 		objInfo.Size = snappyLength
 
-		// Open a pipe for compression
-		// Where compressed data from the disk is written to the pipeWriter.
-		pipeReader, pipeWriter := io.Pipe()
-		snappyReader := snappy.NewReader(pipeReader)
+		// Decompression reader.
+		snappyReader := snappy.NewReader(reader)
 
 		// Discarding the data till the startOffset.
-		// The limit is set to the decompressed size if the range is disabled.
+		// The limit is set to the actual size if the range is disabled.
 		limitReader := io.LimitReader(ioutil.NewSkipReader(snappyReader, snappyStartOffset), snappyLength)
-		cleanUp := func() { pipeReader.Close() }
-		compressReader := NewGetObjectReader(limitReader, nil, cleanUp)
-
-		wg.Add(1) //For closures.
-		go func() {
-			defer wg.Done()
-			// Finally, writes to the client.
-			if _, pipeErr = io.Copy(w, compressReader); pipeErr != nil {
-				return
-			}
-			// Close the pipe writer if the data is read already.
-			// This will happen incase of range queries, If the range is satisfied.
-			// Closing the pipe, releases the writer passed to the getObject.
-			pipeWriter.Close()
-		}()
-		writer = pipeWriter
+		cleanUpCompress := func() { reader.Close() }
+		compressReader = NewGetObjectReader(limitReader, nil, cleanUpCompress)
 	} else {
-		writer = w
 		setObjectHeaders(w, objInfo, rs)
 		setHeadGetRespHeaders(w, r.URL.Query())
 	}
@@ -541,7 +522,11 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	statusCodeWritten := false
-	httpWriter := ioutil.WriteOnClose(writer)
+	httpWriter := ioutil.WriteOnClose(w)
+	objectReader := reader
+	if objInfo.IsCompressed() {
+		objectReader = compressReader
+	}
 
 	if rs != nil {
 		statusCodeWritten = true
@@ -549,12 +534,8 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// Write object content to response body
-	// The writer will be closed incase of range queries, which will emit ErrClosedPipe.
-	if _, err = io.Copy(httpWriter, reader); err != nil {
+	if _, err = io.Copy(httpWriter, objectReader); err != nil {
 		httpWriter.Close()
-		if objInfo.IsCompressed() {
-			wg.Wait()
-		}
 		if !httpWriter.HasWritten() && !statusCodeWritten { // write error response only if no data or headers has been written to client yet
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 		}
@@ -565,10 +546,6 @@ func (api objectAPIHandlers) GetObjectHandler(w http.ResponseWriter, r *http.Req
 			writeErrorResponse(w, toAPIErrorCode(err), r.URL)
 			return
 		}
-	}
-
-	if objInfo.IsCompressed() {
-		wg.Wait() // Wait till the copy go-routines retire.
 	}
 
 	// Get host and port from Request.RemoteAddr.
