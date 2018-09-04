@@ -24,6 +24,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/minio/minio/cmd/crypto"
 )
 
 // Returns a hexadecimal representation of time at the
@@ -61,7 +63,7 @@ func encodeResponseJSON(response interface{}) []byte {
 }
 
 // Write object header
-func setObjectHeaders(w http.ResponseWriter, objInfo ObjectInfo, contentRange *httpRange) {
+func setObjectHeaders(w http.ResponseWriter, objInfo ObjectInfo, rs *HTTPRangeSpec) {
 	// set common headers
 	setCommonHeaders(w)
 
@@ -96,9 +98,23 @@ func setObjectHeaders(w http.ResponseWriter, objInfo ObjectInfo, contentRange *h
 	}
 
 	// for providing ranged content
-	if contentRange != nil && contentRange.offsetBegin > -1 {
+	if rs != nil {
 		// Override content-length
-		w.Header().Set("Content-Length", strconv.FormatInt(contentRange.getLength(), 10))
-		w.Header().Set("Content-Range", contentRange.String())
+
+		// FIXME: Error cases are ignored as they are not
+		// expected happen here.
+		var size int64
+		switch {
+		case crypto.IsEncrypted(objInfo.UserDefined):
+			size, _ = objInfo.DecryptedSize()
+
+		default:
+			size = objInfo.Size
+		}
+
+		rangeLen, _ := rs.GetLength(size)
+
+		w.Header().Set("Content-Length", strconv.FormatInt(rangeLen, 10))
+		w.Header().Set("Content-Range", rs.ContentRangeString(size))
 	}
 }

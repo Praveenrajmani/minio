@@ -1110,9 +1110,9 @@ const (
 
 func newTestSignedRequest(method, urlStr string, contentLength int64, body io.ReadSeeker, accessKey, secretKey string, signer signerType) (*http.Request, error) {
 	if signer == signerV2 {
-		return newTestSignedRequestV2(method, urlStr, contentLength, body, accessKey, secretKey)
+		return newTestSignedRequestV2(method, urlStr, contentLength, body, accessKey, secretKey, nil)
 	}
-	return newTestSignedRequestV4(method, urlStr, contentLength, body, accessKey, secretKey)
+	return newTestSignedRequestV4(method, urlStr, contentLength, body, accessKey, secretKey, nil)
 }
 
 // Returns request with correct signature but with incorrect SHA256.
@@ -1139,7 +1139,7 @@ func newTestSignedBadSHARequest(method, urlStr string, contentLength int64, body
 }
 
 // Returns new HTTP request object signed with signature v2.
-func newTestSignedRequestV2(method, urlStr string, contentLength int64, body io.ReadSeeker, accessKey, secretKey string) (*http.Request, error) {
+func newTestSignedRequestV2(method, urlStr string, contentLength int64, body io.ReadSeeker, accessKey, secretKey string, headers map[string]string) (*http.Request, error) {
 	req, err := newTestRequest(method, urlStr, contentLength, body)
 	if err != nil {
 		return nil, err
@@ -1151,6 +1151,10 @@ func newTestSignedRequestV2(method, urlStr string, contentLength int64, body io.
 		return req, nil
 	}
 
+	for k, v := range headers {
+		req.Header.Add(k, v)
+	}
+
 	err = signRequestV2(req, accessKey, secretKey)
 	if err != nil {
 		return nil, err
@@ -1160,7 +1164,7 @@ func newTestSignedRequestV2(method, urlStr string, contentLength int64, body io.
 }
 
 // Returns new HTTP request object signed with signature v4.
-func newTestSignedRequestV4(method, urlStr string, contentLength int64, body io.ReadSeeker, accessKey, secretKey string) (*http.Request, error) {
+func newTestSignedRequestV4(method, urlStr string, contentLength int64, body io.ReadSeeker, accessKey, secretKey string, headers map[string]string) (*http.Request, error) {
 	req, err := newTestRequest(method, urlStr, contentLength, body)
 	if err != nil {
 		return nil, err
@@ -1169,6 +1173,10 @@ func newTestSignedRequestV4(method, urlStr string, contentLength int64, body io.
 	// Anonymous request return quickly.
 	if accessKey == "" || secretKey == "" {
 		return req, nil
+	}
+
+	for k, v := range headers {
+		req.Header.Add(k, v)
 	}
 
 	err = signRequestV4(req, accessKey, secretKey)
