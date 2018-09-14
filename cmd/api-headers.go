@@ -107,7 +107,8 @@ func setObjectHeaders(w http.ResponseWriter, objInfo ObjectInfo, rs *HTTPRangeSp
 		switch {
 		case crypto.IsEncrypted(objInfo.UserDefined):
 			size, _ = objInfo.DecryptedSize()
-
+		case objInfo.IsCompressed():
+			size = objInfo.GetActualSize()
 		default:
 			size = objInfo.Size
 		}
