@@ -17,9 +17,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"io"
+	"net/http"
 	"path"
 	"strconv"
 	"strings"
@@ -160,6 +162,53 @@ func (xl xlObjects) CopyObject(ctx context.Context, srcBucket, srcObject, dstBuc
 	pipeReader.Close()
 
 	return objInfo, nil
+}
+
+// GetObjectNInfo - returns object info and an object
+// Read(Closer). When err != nil, the returned reader is always nil.
+func (xl xlObjects) GetObjectNInfo(ctx context.Context, bucket, object string, rs *HTTPRangeSpec, h http.Header) (gr *GetObjectReader, err error) {
+	// Acquire lock
+	lock := xl.nsMutex.NewNSLock(bucket, object)
+	if err = lock.GetRLock(globalObjectTimeout); err != nil {
+		return nil, err
+	}
+	nsUnlocker := lock.RUnlock
+
+	if err = checkGetObjArgs(ctx, bucket, object); err != nil {
+		return nil, err
+	}
+
+	// Handler directory request by returning a reader that
+	// returns no bytes.
+	if hasSuffix(object, slashSeparator) {
+		if !xl.isObjectDir(bucket, object) {
+			return nil, toObjectErr(errFileNotFound, bucket, object)
+		}
+		var objInfo ObjectInfo
+		if objInfo, err = xl.getObjectInfoDir(ctx, bucket, object); err != nil {
+			return nil, toObjectErr(err, bucket, object)
+		}
+		return NewGetObjectReaderFromReader(bytes.NewBuffer(nil), objInfo, nsUnlocker)
+	}
+
+	var objInfo ObjectInfo
+	objInfo, err = xl.getObjectInfo(ctx, bucket, object)
+	if err != nil {
+		return nil, toObjectErr(err, bucket, object)
+	}
+
+	fn, off, length, nErr := NewGetObjectReader(rs, objInfo, nsUnlocker)
+	if nErr != nil {
+		return nil, err
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		err := xl.getObject(ctx, bucket, object, off, length, pw, "", ObjectOptions{})
+		pw.CloseWithError(err)
+	}()
+
+	return fn(pr, h)
 }
 
 // GetObject - reads an object erasured coded across multiple
