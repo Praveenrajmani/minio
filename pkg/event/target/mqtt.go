@@ -17,6 +17,8 @@
 package target
 
 import (
+	"fmt"
+	"github.com/minio/minio/pkg/event"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -25,7 +27,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.mqtt.golang"
-	"github.com/minio/minio/pkg/event"
+	 
 	xnet "github.com/minio/minio/pkg/net"
 )
 
@@ -103,6 +105,28 @@ func (target *MQTTTarget) Send(eventData event.Event) error {
 	return nil
 }
 
+// SendFromWebhook - sends event to MQTT.
+func (target *MQTTTarget) SendFromWebhook(topic string, qos byte, eventLog event.Log) error {
+	if !target.client.IsConnected() {
+		token := target.client.Connect()
+		if token.Wait() {
+			if err := token.Error(); err != nil {
+				return err
+			}
+		}
+	}
+	data, err := json.Marshal(eventLog)
+	if err != nil {
+		return err
+	}
+	fmt.Println("publishing now")
+	token := target.client.Publish(topic, qos, false, string(data))
+	if token.Wait() {
+		return token.Error()
+	}
+	return nil
+}
+
 // Close - does nothing and available for interface compatibility.
 func (target *MQTTTarget) Close() error {
 	return nil
@@ -118,7 +142,8 @@ func NewMQTTTarget(id string, args MQTTArgs) (*MQTTTarget, error) {
 		SetMaxReconnectInterval(args.MaxReconnectInterval).
 		SetKeepAlive(args.KeepAlive).
 		SetTLSConfig(&tls.Config{RootCAs: args.RootCAs}).
-		AddBroker(args.Broker.String())
+		AddBroker(args.Broker.String()).
+		
 
 	client := mqtt.NewClient(options)
 	token := client.Connect()
