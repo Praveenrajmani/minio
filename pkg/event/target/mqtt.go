@@ -119,7 +119,6 @@ func (target *MQTTTarget) SendFromWebhook(topic string, qos byte, eventLog event
 	if err != nil {
 		return err
 	}
-	fmt.Println("publishing now")
 	token := target.client.Publish(topic, qos, false, string(data))
 	if token.Error() != nil {
 		return token.Error()

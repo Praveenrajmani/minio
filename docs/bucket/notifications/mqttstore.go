@@ -20,7 +20,6 @@
 
  import (
 	 "github.com/minio/minio/cmd"
-	 "fmt"
 	 "log"
 	 "net/http"
 	 "io/ioutil"
@@ -38,7 +37,8 @@
 	"username": "",
 	"password": "",
 	"reconnectInterval": 0,
-	"keepAliveInterval": 0
+	"keepAliveInterval": 0,
+	"queueDir": "/home/praveen/events/mqtt"
   }`)
 
  
@@ -50,20 +50,20 @@ func main() {
 
 	err = json.Unmarshal(mqttArgs, &args)
 	if err != nil {
-		fmt.Println("error: ", err.Error())
+		log.Fatal(err)
 		return
 	}
 
 	err = args.Validate()
 	if err != nil {
-		fmt.Println("error: ", err.Error())
+		log.Fatal(err)
 		return
 	}
 
-	newTarget, err := target.NewMQTTTarget(string(id), args, cmd.GetMQTTStoreDir())
+	newTarget, err := target.NewMQTTTarget(string(id), args)
 	id = id + 1
 	if err != nil {
-		fmt.Println("error: ", err.Error())
+		log.Fatal(err)
 		return
 	}
 
@@ -71,29 +71,24 @@ func main() {
 		b, err := ioutil.ReadAll(r.Body)
 		defer r.Body.Close()
 		if err != nil {
-			fmt.Println(err)
-			//http.Error(w, err.Error(), 500)
+			log.Fatal(err)
 			return
 		}
 		var msg event.Log
 		err = json.Unmarshal(b, &msg)
 		if err != nil {
-			fmt.Println(err)
-			//http.Error(w, err.Error(), 500)
+			log.Fatal(err)
 			return
 		}
 		go func() {
-			fmt.Println("publ")
 			err = newTarget.SendFromWebhook(args.Topic, args.QoS, msg)
 			if err != nil {
-				fmt.Println(err)
-				//http.Error(w, err.Error(), 500)
+				log.Fatal(err)
 				return
 			}
 		}()	
-		
-		//w.Header().Set("content-type", "text/plain")
-		w.Write([]byte("got response")) 
+		w.WriteHeader(200)
+		w.Write([]byte("ping")) 
 	})
 
 	log.Printf("listening on http://%s/", "localhost:8080")
