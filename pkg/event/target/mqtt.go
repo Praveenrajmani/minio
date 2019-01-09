@@ -98,7 +98,7 @@ func (target *MQTTTarget) Send(eventData event.Event) error {
 
 	token := target.client.Publish(target.args.Topic, target.args.QoS, false, string(data))
 
-	if token.Wait() {
+	if token.Wait() { 
 		return token.Error()
 	}
 
@@ -121,7 +121,7 @@ func (target *MQTTTarget) SendFromWebhook(topic string, qos byte, eventLog event
 	}
 	fmt.Println("publishing now")
 	token := target.client.Publish(topic, qos, false, string(data))
-	if token.Wait() {
+	if token.Error() != nil {
 		return token.Error()
 	}
 	return nil
@@ -133,7 +133,7 @@ func (target *MQTTTarget) Close() error {
 }
 
 // NewMQTTTarget - creates new MQTT target.
-func NewMQTTTarget(id string, args MQTTArgs) (*MQTTTarget, error) {
+func NewMQTTTarget(id string, args MQTTArgs, mqttStoreDir string) (*MQTTTarget, error) {
 	options := mqtt.NewClientOptions().
 		SetClientID(args.ClientID).
 		SetCleanSession(true).
@@ -143,7 +143,7 @@ func NewMQTTTarget(id string, args MQTTArgs) (*MQTTTarget, error) {
 		SetKeepAlive(args.KeepAlive).
 		SetTLSConfig(&tls.Config{RootCAs: args.RootCAs}).
 		AddBroker(args.Broker.String()).
-		
+		SetStore(mqtt.NewFileStore(mqttStoreDir))
 
 	client := mqtt.NewClient(options)
 	token := client.Connect()

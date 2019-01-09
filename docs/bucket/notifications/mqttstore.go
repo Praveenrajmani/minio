@@ -19,6 +19,7 @@
  package main
 
  import (
+	 "github.com/minio/minio/cmd"
 	 "fmt"
 	 "log"
 	 "net/http"
@@ -59,7 +60,7 @@ func main() {
 		return
 	}
 
-	newTarget, err := target.NewMQTTTarget(string(id), args)
+	newTarget, err := target.NewMQTTTarget(string(id), args, cmd.GetMQTTStoreDir())
 	id = id + 1
 	if err != nil {
 		fmt.Println("error: ", err.Error())
@@ -70,31 +71,28 @@ func main() {
 		b, err := ioutil.ReadAll(r.Body)
 		defer r.Body.Close()
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			fmt.Println(err)
+			//http.Error(w, err.Error(), 500)
 			return
 		}
-		fmt.Println("got")
-		//fmt.Println(string(b))
 		var msg event.Log
 		err = json.Unmarshal(b, &msg)
-		fmt.Println("unmarshalled json")
-		fmt.Println(msg.Records)
-		err = newTarget.SendFromWebhook(args.Topic, args.QoS, msg)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			fmt.Println(err)
+			//http.Error(w, err.Error(), 500)
 			return
 		}
-		// Unmarshal
-		// var msg Message
-		// err = json.Unmarshal(b, &msg)
+		go func() {
+			fmt.Println("publ")
+			err = newTarget.SendFromWebhook(args.Topic, args.QoS, msg)
+			if err != nil {
+				fmt.Println(err)
+				//http.Error(w, err.Error(), 500)
+				return
+			}
+		}()	
 		
-
-		// output, err := json.Marshal(msg)
-		// if err != nil {
-		// 	http.Error(w, err.Error(), 500)
-		// 	return
-		// }
-		// w.Header().Set("content-type", "application/json")
+		//w.Header().Set("content-type", "text/plain")
 		w.Write([]byte("got response")) 
 	})
 

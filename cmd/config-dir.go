@@ -19,6 +19,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"fmt"
 
 	homedir "github.com/mitchellh/go-homedir"
 )
@@ -84,11 +85,6 @@ func (dir *ConfigDir) Get() string {
 	return dir.path
 }
 
-// GetMQTTStoreDir - returns absolute path of mqtt file.
-func (dir *ConfigDir) GetMQTTStoreDir() string {
-	return filepath.Join(dir.Get(), mqttStoreDir)
-}
-
 // Attempts to create all directories, ignores any permission denied errors.
 func mkdirAllIgnorePerm(path string) error {
 	err := os.MkdirAll(path, 0700)
@@ -114,6 +110,8 @@ func getPrivateKeyFile() string {
 	return filepath.Join(globalCertsDir.Get(), privateKeyFile)
 }
 
-func getMQTTStoreDir() string {
-	return configDir.GetMQTTStoreDir()
+func GetMQTTStoreDir() string {
+	fmt.Println("filepath.Join(globalConfigDir.Get(), mqttStoreDir)")
+	fmt.Println(filepath.Join(globalConfigDir.Get(), mqttStoreDir))
+	return filepath.Join(globalConfigDir.Get(), mqttStoreDir)
 }
