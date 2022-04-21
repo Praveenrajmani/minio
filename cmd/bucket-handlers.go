@@ -481,6 +481,16 @@ func (api objectAPIHandlers) DeleteMultipleObjectsHandler(w http.ResponseWriter,
 		hasLockEnabled = true
 	}
 
+	forceDelete := false
+	if d := r.Header.Get(xhttp.MinIOForceDelete); d != "" {
+		if b, err := strconv.ParseBool(d); err == nil {
+			forceDelete = b
+		} else {
+			writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
+			return
+		}
+	}
+
 	type deleteResult struct {
 		delInfo DeletedObject
 		errInfo DeleteError
@@ -590,6 +600,7 @@ func (api objectAPIHandlers) DeleteMultipleObjectsHandler(w http.ResponseWriter,
 	dObjects, errs := deleteObjectsFn(ctx, bucket, deleteList, ObjectOptions{
 		PrefixEnabledFn:  vc.PrefixEnabled,
 		VersionSuspended: vc.Suspended(),
+		ForceDelete:      forceDelete,
 	})
 
 	for i := range errs {

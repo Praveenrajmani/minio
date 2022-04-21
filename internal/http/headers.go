@@ -144,7 +144,7 @@ const (
 	// Server-Status
 	MinIOServerStatus = "x-minio-server-status"
 
-	// Delete special flag to force delete a bucket or a prefix
+	// Delete special flag to force delete bucket, prefix or objects
 	MinIOForceDelete = "x-minio-force-delete"
 
 	// Create special flag to force create a bucket

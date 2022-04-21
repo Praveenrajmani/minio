@@ -1152,7 +1152,9 @@ func (es *erasureSingle) putObject(ctx context.Context, bucket string, object st
 }
 
 func (es *erasureSingle) deleteObjectVersion(ctx context.Context, bucket, object string, writeQuorum int, fi FileInfo, forceDelMarker bool) error {
-	return es.disk.DeleteVersion(ctx, bucket, object, fi, forceDelMarker)
+	return es.disk.DeleteVersion(ctx, bucket, object, fi, StoreOptions{
+		ForceDelMarker: forceDelMarker,
+	})
 }
 
 // DeleteObjects deletes objects/versions in bulk, this function will still automatically split objects list
@@ -1272,7 +1274,9 @@ func (es *erasureSingle) DeleteObjects(ctx context.Context, bucket string, objec
 				}
 				return
 			}
-			errs := disk.DeleteVersions(ctx, bucket, dedupVersions)
+			errs := disk.DeleteVersions(ctx, bucket, StoreOptions{
+				ForceDelete: opts.ForceDelete,
+			}, dedupVersions)
 			for i, err := range errs {
 				if err == nil {
 					continue

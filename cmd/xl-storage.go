@@ -813,7 +813,7 @@ func (s *xlStorage) DeleteVol(ctx context.Context, volume string, forceDelete bo
 	}
 
 	if forceDelete {
-		err = s.moveToTrash(volumeDir, true)
+		err = s.moveToTrash(volumeDir, true, true)
 	} else {
 		err = Remove(volumeDir)
 	}
@@ -872,7 +872,7 @@ func (s *xlStorage) ListDir(ctx context.Context, volume, dirPath string, count i
 	return entries, nil
 }
 
-func (s *xlStorage) deleteVersions(ctx context.Context, volume, path string, fis ...FileInfo) error {
+func (s *xlStorage) deleteVersions(ctx context.Context, volume, path string, opts StoreOptions, fis ...FileInfo) error {
 	buf, err := s.ReadAll(ctx, volume, pathJoin(path, xlStorageFormatFile))
 	if err != nil {
 		if err != errFileNotFound {
@@ -934,7 +934,7 @@ func (s *xlStorage) deleteVersions(ctx context.Context, volume, path string, fis
 			if err = checkPathLength(filePath); err != nil {
 				return err
 			}
-			if err = s.moveToTrash(filePath, true); err != nil {
+			if err = s.moveToTrash(filePath, true, opts.ForceDelete); err != nil {
 				if err != errFileNotFound {
 					return err
 				}
@@ -954,7 +954,7 @@ func (s *xlStorage) deleteVersions(ctx context.Context, volume, path string, fis
 	}
 
 	// Move xl.meta to trash
-	err = s.moveToTrash(pathJoin(volumeDir, path, xlStorageFormatFile), false)
+	err = s.moveToTrash(pathJoin(volumeDir, path, xlStorageFormatFile), false, opts.ForceDelete)
 	if err == nil || err == errFileNotFound {
 		s.deleteFile(volumeDir, pathJoin(volumeDir, path), false)
 	}
@@ -963,7 +963,7 @@ func (s *xlStorage) deleteVersions(ctx context.Context, volume, path string, fis
 
 // DeleteVersions deletes slice of versions, it can be same object
 // or multiple objects.
-func (s *xlStorage) DeleteVersions(ctx context.Context, volume string, versions []FileInfoVersions) []error {
+func (s *xlStorage) DeleteVersions(ctx context.Context, volume string, opts StoreOptions, versions []FileInfoVersions) []error {
 	errs := make([]error, len(versions))
 
 	for i, fiv := range versions {
@@ -971,7 +971,7 @@ func (s *xlStorage) DeleteVersions(ctx context.Context, volume string, versions 
 			errs[i] = ctx.Err()
 			continue
 		}
-		if err := s.deleteVersions(ctx, volume, fiv.Name, fiv.Versions...); err != nil {
+		if err := s.deleteVersions(ctx, volume, fiv.Name, opts, fiv.Versions...); err != nil {
 			errs[i] = err
 		}
 		diskHealthCheckOK(ctx, errs[i])
@@ -980,17 +980,31 @@ func (s *xlStorage) DeleteVersions(ctx context.Context, volume string, versions 
 	return errs
 }
 
-func (s *xlStorage) moveToTrash(filePath string, recursive bool) error {
+func (s *xlStorage) moveToTrash(filePath string, recursive, force bool) error {
 	pathUUID := mustGetUUID()
+	targetPath := pathutil.Join(s.diskPath, minioMetaTmpDeletedBucket, pathUUID)
+
+	var renameFn func(source, target string) error
 	if recursive {
-		return renameAll(filePath, pathutil.Join(s.diskPath, minioMetaTmpDeletedBucket, pathUUID))
+		renameFn = renameAll
+	} else {
+		renameFn = Rename
 	}
-	return Rename(filePath, pathutil.Join(s.diskPath, minioMetaTmpDeletedBucket, pathUUID))
+
+	if err := renameFn(filePath, targetPath); err != nil {
+		return err
+	}
+
+	if force {
+		removeAll(targetPath)
+	}
+
+	return nil
 }
 
 // DeleteVersion - deletes FileInfo metadata for path at `xl.meta`. forceDelMarker
 // will force creating a new `xl.meta` to create a new delete marker
-func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) error {
+func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, opts StoreOptions) error {
 	if HasSuffix(path, SlashSeparator) {
 		return s.Delete(ctx, volume, path, false)
 	}
@@ -1001,7 +1015,7 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 			return err
 		}
 		metaDataPoolPut(buf) // Never used, return it
-		if fi.Deleted && forceDelMarker {
+		if fi.Deleted && opts.ForceDelMarker {
 			// Create a new xl.meta with a delete marker in it
 			return s.WriteMetadata(ctx, volume, path, fi)
 		}
@@ -1060,7 +1074,7 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		if err = checkPathLength(filePath); err != nil {
 			return err
 		}
-		if err = s.moveToTrash(filePath, true); err != nil {
+		if err = s.moveToTrash(filePath, true, opts.ForceDelete); err != nil {
 			if err != errFileNotFound {
 				return err
 			}
@@ -1083,7 +1097,7 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		return err
 	}
 
-	err = s.moveToTrash(filePath, false)
+	err = s.moveToTrash(filePath, false, opts.ForceDelete)
 	if err == nil || err == errFileNotFound {
 		s.deleteFile(volumeDir, pathJoin(volumeDir, path), false)
 	}
@@ -2022,7 +2036,7 @@ func (s *xlStorage) deleteFile(basePath, deletePath string, recursive bool) erro
 
 	var err error
 	if recursive {
-		err = s.moveToTrash(deletePath, true)
+		err = s.moveToTrash(deletePath, true, false)
 	} else {
 		err = Remove(deletePath)
 	}
@@ -2350,12 +2364,12 @@ func (s *xlStorage) RenameData(ctx context.Context, srcVolume, srcPath string, f
 
 		// renameAll only for objects that have xl.meta not saved inline.
 		if len(fi.Data) == 0 && fi.Size > 0 {
-			s.moveToTrash(dstDataPath, true)
+			s.moveToTrash(dstDataPath, true, false)
 			if healing {
 				// If we are healing we should purge any legacyDataPath content,
 				// that was previously preserved during PutObject() call
 				// on a versioned bucket.
-				s.moveToTrash(legacyDataPath, true)
+				s.moveToTrash(legacyDataPath, true, false)
 			}
 			if err = renameAll(srcDataPath, dstDataPath); err != nil {
 				if legacyPreserved {
@@ -2381,7 +2395,7 @@ func (s *xlStorage) RenameData(ctx context.Context, srcVolume, srcPath string, f
 		// movement, this is to ensure that previous data references can co-exist for
 		// any recoverability.
 		if oldDstDataPath != "" {
-			s.moveToTrash(oldDstDataPath, true)
+			s.moveToTrash(oldDstDataPath, true, false)
 		}
 	} else {
 		// Write meta-file directly, no data

@@ -1726,7 +1726,7 @@ func TestXLStorageDeleteVersion(t *testing.T) {
 
 	// Delete version 0...
 	checkVerExist(t)
-	err = xl.DeleteVersion(ctx, volume, object, FileInfo{Name: object, Volume: volume, VersionID: versions[0]}, false)
+	err = xl.DeleteVersion(ctx, volume, object, FileInfo{Name: object, Volume: volume, VersionID: versions[0]}, StoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1739,7 +1739,9 @@ func TestXLStorageDeleteVersion(t *testing.T) {
 		fis[0].Versions = append(fis[0].Versions, FileInfo{Name: object, Volume: volume, VersionID: versions[i]})
 		deleted[i] = true
 	}
-	errs := xl.DeleteVersions(ctx, volume, fis)
+	errs := xl.DeleteVersions(ctx, volume, StoreOptions{
+		ForceDelete: false,
+	}, fis)
 	if errs[0] != nil {
 		t.Fatalf("expected nil error, got %v", errs[0])
 	}
@@ -1751,7 +1753,9 @@ func TestXLStorageDeleteVersion(t *testing.T) {
 		fis[0].Versions = append(fis[0].Versions, FileInfo{Name: object, Volume: volume, VersionID: versions[i]})
 		deleted[i] = true
 	}
-	errs = xl.DeleteVersions(ctx, volume, fis)
+	errs = xl.DeleteVersions(ctx, volume, StoreOptions{
+		ForceDelete: false,
+	}, fis)
 	if errs[0] != nil {
 		t.Fatalf("expected nil error, got %v", errs[0])
 	}
