@@ -243,15 +243,15 @@ func parseRequestToken(token string) (subToken string, nodeIndex int) {
 	return subToken, nodeIndex
 }
 
-func proxyRequestByToken(ctx context.Context, w http.ResponseWriter, r *http.Request, token string) (string, bool) {
+func proxyRequestByToken(w http.ResponseWriter, r *http.Request, token string, handleErr bool) (string, bool) {
 	subToken, nodeIndex := parseRequestToken(token)
 	if nodeIndex >= 0 {
-		return subToken, proxyRequestByNodeIndex(ctx, w, r, nodeIndex)
+		return subToken, proxyRequestByNodeIndex(w, r, nodeIndex, handleErr)
 	}
 	return subToken, false
 }
 
-func proxyRequestByNodeIndex(ctx context.Context, w http.ResponseWriter, r *http.Request, index int) (success bool) {
+func proxyRequestByNodeIndex(w http.ResponseWriter, r *http.Request, index int, handleErr bool) (success bool) {
 	if len(globalProxyEndpoints) == 0 {
 		return false
 	}
@@ -262,7 +262,7 @@ func proxyRequestByNodeIndex(ctx context.Context, w http.ResponseWriter, r *http
 	if ep.IsLocal {
 		return false
 	}
-	return proxyRequest(ctx, w, r, ep)
+	return proxyRequest(w, r, ep, handleErr)
 }
 
 // ListObjectsV1Handler - GET Bucket (List Objects) Version 1.

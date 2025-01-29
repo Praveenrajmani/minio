@@ -447,7 +447,7 @@ func getHostName(r *http.Request) (hostName string) {
 }
 
 // Proxy any request to an endpoint.
-func proxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, ep ProxyEndpoint) (success bool) {
+func proxyRequest(w http.ResponseWriter, r *http.Request, ep ProxyEndpoint, handleErr bool) (success bool) {
 	success = true
 
 	// Make sure we remove any existing headers before
@@ -456,16 +456,21 @@ func proxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, e
 		w.Header().Del(k)
 	}
 
-	f := handlers.NewForwarder(&handlers.Forwarder{
+	forwarder := &handlers.Forwarder{
 		PassHost:     true,
 		RoundTripper: ep.Transport,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+		ErrorHandler: nil, // Sends 502 Status Bad Gateway
+	}
+
+	if handleErr {
+		forwarder.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			success = false
 			if err != nil && !errors.Is(err, context.Canceled) {
 				replLogIf(GlobalContext, err)
 			}
-		},
-	})
+		}
+	}
+	f := handlers.NewForwarder(forwarder)
 
 	r.URL.Scheme = "http"
 	if globalIsTLS {

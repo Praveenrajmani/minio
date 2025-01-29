@@ -18,7 +18,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,7 +106,7 @@ func (a adminAPIHandlers) StartDecommission(w http.ResponseWriter, r *http.Reque
 		poolIndices = append(poolIndices, idx)
 	}
 
-	if len(poolIndices) == 0 || !proxyDecommissionRequest(ctx, globalEndpoints[poolIndices[0]].Endpoints[0], w, r) {
+	if len(poolIndices) == 0 || !proxyDecommissionRequest(globalEndpoints[poolIndices[0]].Endpoints[0], w, r) {
 		if err := z.Decommission(r.Context(), poolIndices...); err != nil {
 			writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
 			return
@@ -154,7 +153,7 @@ func (a adminAPIHandlers) CancelDecommission(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if !proxyDecommissionRequest(ctx, globalEndpoints[idx].Endpoints[0], w, r) {
+	if !proxyDecommissionRequest(globalEndpoints[idx].Endpoints[0], w, r) {
 		if err := pools.DecommissionCancel(ctx, idx); err != nil {
 			writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
 			return
@@ -259,7 +258,7 @@ func (a adminAPIHandlers) RebalanceStart(w http.ResponseWriter, r *http.Request)
 	if ep := globalEndpoints[0].Endpoints[0]; !ep.IsLocal {
 		for nodeIdx, proxyEp := range globalProxyEndpoints {
 			if proxyEp.Endpoint.Host == ep.Host {
-				if proxyRequestByNodeIndex(ctx, w, r, nodeIdx) {
+				if proxyRequestByNodeIndex(w, r, nodeIdx, true) {
 					return
 				}
 			}
@@ -330,7 +329,7 @@ func (a adminAPIHandlers) RebalanceStatus(w http.ResponseWriter, r *http.Request
 	if ep := globalEndpoints[0].Endpoints[0]; !ep.IsLocal {
 		for nodeIdx, proxyEp := range globalProxyEndpoints {
 			if proxyEp.Endpoint.Host == ep.Host {
-				if proxyRequestByNodeIndex(ctx, w, r, nodeIdx) {
+				if proxyRequestByNodeIndex(w, r, nodeIdx, true) {
 					return
 				}
 			}
@@ -377,14 +376,14 @@ func (a adminAPIHandlers) RebalanceStop(w http.ResponseWriter, r *http.Request) 
 	globalNotificationSys.LoadRebalanceMeta(ctx, false)
 }
 
-func proxyDecommissionRequest(ctx context.Context, defaultEndPoint Endpoint, w http.ResponseWriter, r *http.Request) (proxy bool) {
+func proxyDecommissionRequest(defaultEndPoint Endpoint, w http.ResponseWriter, r *http.Request) (proxy bool) {
 	host := env.Get("_MINIO_DECOM_ENDPOINT_HOST", defaultEndPoint.Host)
 	if host == "" {
 		return
 	}
 	for nodeIdx, proxyEp := range globalProxyEndpoints {
 		if proxyEp.Endpoint.Host == host && !proxyEp.IsLocal {
-			if proxyRequestByNodeIndex(ctx, w, r, nodeIdx) {
+			if proxyRequestByNodeIndex(w, r, nodeIdx, true) {
 				return true
 			}
 		}
